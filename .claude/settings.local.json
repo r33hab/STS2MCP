@@ -21,7 +21,8 @@
       "mcp__sts2__rewards_skip_card",
       "mcp__sts2__deck_cancel_selection",
       "mcp__sts2__combat_select_card",
-      "mcp__sts2__combat_confirm_selection"
+      "mcp__sts2__combat_confirm_selection",
+      "mcp__sts2__treasure_claim_relic"
     ]
   },
   "enableAllProjectMcpServers": true,
