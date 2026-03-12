@@ -649,7 +649,9 @@ public static partial class McpMod
                 string stars = player.TryGetValue("stars", out var s) && s != null ? $" | Stars: {s}" : "";
 
                 sb.AppendLine($"## Player: {player["character"]}{youTag}{aliveTag}{readyTag}");
-                sb.AppendLine($"HP: {player["hp"]}/{player["max_hp"]} | Block: {player["block"]} | Energy: {player["energy"]}/{player["max_energy"]}{stars} | Gold: {player["gold"]}");
+                string energyStr = player.TryGetValue("energy", out var en) && player.TryGetValue("max_energy", out var men)
+                    ? $" | Energy: {en}/{men}" : "";
+                sb.AppendLine($"HP: {player["hp"]}/{player["max_hp"]} | Block: {player["block"]}{energyStr}{stars} | Gold: {player["gold"]}");
                 sb.AppendLine();
 
                 FormatListSection(sb, "Powers", player, "powers", p => $"- **{p["name"]}** ({p["amount"]}): {p["description"]}");
@@ -658,7 +660,11 @@ public static partial class McpMod
                     string counter = r.TryGetValue("counter", out var c) && c != null ? $" [{c}]" : "";
                     return $"- **{r["name"]}**{counter}: {r["description"]}";
                 });
-                FormatListSection(sb, "Potions", player, "potions", p => $"- [{p["slot"]}] **{p["name"]}**: {p["description"]}");
+                FormatListSection(sb, "Potions", player, "potions", p =>
+                {
+                    string desc = p.TryGetValue("description", out var d) && d != null ? $": {d}" : "";
+                    return $"- [{p["slot"]}] **{p["name"]}**{desc}";
+                });
 
                 if (player["is_local"] is true)
                 {
