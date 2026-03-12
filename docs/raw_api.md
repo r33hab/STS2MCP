@@ -295,7 +295,7 @@ Returns the multiplayer game state. Shares the same `state_type` values as singl
 - `is_bidding_phase`: whether relics are revealed and bidding is active
 - `bids[]`: per-player relic bids (`player`, `is_local`, `voted`, `vote_relic_index`)
 - `all_bid`: whether all players have bid
-- Chest is NOT auto-opened (multiplayer sync manages this)
+- Chest is auto-opened when state is queried (same as singleplayer)
 
 ## `POST /api/v1/multiplayer`
 

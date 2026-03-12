@@ -351,10 +351,11 @@ public static partial class McpMod
 
     private static Dictionary<string, object?> BuildMultiplayerTreasureState(TreasureRoom treasureRoom, RunState runState)
     {
-        // Build treasure state WITHOUT auto-opening chest — in multiplayer the
-        // TreasureRoomRelicSynchronizer manages the chest-open flow and auto-clicking
-        // could conflict with it. Players should open the chest via the game UI.
-        var state = BuildTreasureStateNoAutoOpen(treasureRoom, runState);
+        // Auto-open chest same as singleplayer. BeginRelicPicking() runs during
+        // TreasureRoom.Enter(), so relics are already generated. The chest click
+        // just triggers the UI animation + gold via OneOffSynchronizer — same path
+        // as a human click or the game's own AutoSlay handler.
+        var state = BuildTreasureState(treasureRoom, runState);
 
         // Add per-player bid data
         try
@@ -444,6 +445,7 @@ public static partial class McpMod
                 {
                     ["id"] = potion.Id.Entry,
                     ["name"] = SafeGetText(() => potion.Title),
+                    ["description"] = SafeGetText(() => potion.DynamicDescription),
                     ["slot"] = slotIndex
                 });
             }
