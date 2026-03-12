@@ -859,7 +859,7 @@ public static partial class McpMod
     {
         var state = new Dictionary<string, object?>();
 
-        var cardHolders = FindAll<NCardHolder>(cardScreen);
+        var cardHolders = FindAllSortedByPosition<NCardHolder>(cardScreen);
         var cards = new List<Dictionary<string, object?>>();
         int index = 0;
         foreach (var holder in cardHolders)
@@ -936,8 +936,8 @@ public static partial class McpMod
             state["prompt"] = prompt;
         }
 
-        // Cards in the grid
-        var cardHolders = FindAll<NGridCardHolder>(screen);
+        // Cards in the grid (sorted by visual position — MoveToFront can reorder children)
+        var cardHolders = FindAllSortedByPosition<NGridCardHolder>(screen);
         var cards = new List<Dictionary<string, object?>>();
         int index = 0;
         foreach (var holder in cardHolders)
@@ -1016,7 +1016,7 @@ public static partial class McpMod
 
         state["prompt"] = "Choose a card.";
 
-        var cardHolders = FindAll<NGridCardHolder>(screen);
+        var cardHolders = FindAllSortedByPosition<NGridCardHolder>(screen);
         var cards = new List<Dictionary<string, object?>>();
         int index = 0;
         foreach (var holder in cardHolders)

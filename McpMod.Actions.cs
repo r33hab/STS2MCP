@@ -420,7 +420,7 @@ public static partial class McpMod
 
         int cardIndex = indexElem.GetInt32();
 
-        var cardHolders = FindAll<NCardHolder>(cardScreen);
+        var cardHolders = FindAllSortedByPosition<NCardHolder>(cardScreen);
         if (cardIndex < 0 || cardIndex >= cardHolders.Count)
             return Error($"Card index {cardIndex} out of range (screen has {cardHolders.Count} cards)");
 
@@ -518,7 +518,7 @@ public static partial class McpMod
             if (grid == null)
                 return Error("Card grid not found in selection screen");
 
-            var holders = FindAll<NGridCardHolder>(gridScreen);
+            var holders = FindAllSortedByPosition<NGridCardHolder>(gridScreen);
             if (index < 0 || index >= holders.Count)
                 return Error($"Card index {index} out of range ({holders.Count} cards available)");
 
@@ -534,7 +534,7 @@ public static partial class McpMod
         }
         else if (overlay is NChooseACardSelectionScreen chooseScreen)
         {
-            var holders = FindAll<NGridCardHolder>(chooseScreen);
+            var holders = FindAllSortedByPosition<NGridCardHolder>(chooseScreen);
             if (index < 0 || index >= holders.Count)
                 return Error($"Card index {index} out of range ({holders.Count} cards available)");
 

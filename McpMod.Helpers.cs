@@ -105,6 +105,23 @@ public static partial class McpMod
         return list;
     }
 
+    /// <summary>
+    /// FindAll variant that sorts results by visual position (row-major: top-to-bottom, left-to-right).
+    /// NGridCardHolder.OnFocus() calls MoveToFront() which scrambles child order for z-rendering.
+    /// Sorting by GlobalPosition restores the correct visual order for both single-row (card rewards,
+    /// choose-a-card) and multi-row (deck selection grids) layouts.
+    /// </summary>
+    internal static List<T> FindAllSortedByPosition<T>(Node start) where T : Control
+    {
+        var list = FindAll<T>(start);
+        list.Sort((a, b) =>
+        {
+            int cmp = a.GlobalPosition.Y.CompareTo(b.GlobalPosition.Y);
+            return cmp != 0 ? cmp : a.GlobalPosition.X.CompareTo(b.GlobalPosition.X);
+        });
+        return list;
+    }
+
     private static void FindAllRecursive<T>(Node node, List<T> found) where T : Node
     {
         if (!GodotObject.IsInstanceValid(node))
