@@ -1,65 +1,49 @@
 # Slay The Spire 2 - MCP Server
 
+A mod for [**Slay the Spire 2**](https://store.steampowered.com/app/2868840/Slay_the_Spire_2/) that lets AI agents play the game. Exposes game state and actions via a localhost REST API, with an optional MCP server for Claude Desktop / Claude Code integration.
+
+Singleplayer and multiplayer (co-op) supported. Tested against STS2 `v0.98.3`.
+
 > [!warning]
-> This mod allows external programs to read the game's state and control the gameplay via a localhost API.
->
-> Ill-intentioned software can abuse the API to ruin your runs, and those software likely require no special permissions to run.
->
-> Additionally, even the best AI agents make the gravest mistakes sometimes.
->
-> Use the mod at your own risk, and only with runs you care less about.
+> This mod allows external programs to read and control your game via a localhost API. Use at your own risk with runs you care less about.
 
-A mod for [**Slay the Spire 2**](https://store.steampowered.com/app/2868840/Slay_the_Spire_2/) that exposes the game state and allows external control via REST endpoints, plus an optional Python MCP server for native AI agent integration.
+> [!caution]
+> Multiplayer support is in **beta** — expect bugs. Any multiplayer issues encountered with this mod installed are very likely caused by the mod, not the game. Please disable the mod and verify the issue persists before reporting bugs to the STS2 developers.
 
-Default port is `15526`.
+## For Players
 
-Tested against STS2 `v0.98.2`
+### Install
 
-## Roadmap
+1. Copy `STS2_MCP.dll` and `STS2_MCP.pck` to `<game_install>/mods/`
+2. Launch the game and enable mods in settings (a consent dialog appears on first launch)
+3. The mod starts an HTTP server on `localhost:15526` automatically
 
-- [ ] Singleplayer
-  - [x] Full battle state with keyword glossary
-  - [x] Battle actions (play cards, use potions, end turn)
-  - [x] Post-combat reward screen (claim rewards, card selection, skip, proceed)
-  - [x] Map navigation (full DAG state, path selection)
-  - [x] Rest site actions (resting, smithing, other options)
-  - [x] Shop (browse inventory, purchase cards/relics/potions, card removal, auto-open)
-  - [x] Events (choices, dialogue) and Ancients (dialogue advancement, relic options)
-  - [x] Card selection overlays (transform, upgrade, remove, choose-a-card from potions/effects)
-  - [x] In-combat card selection (exhaust, discard, upgrade prompts from card effects)
-  - [x] Relic selection (boss relics, skip)
-  - [x] Treasure rooms (auto-open chest, claim relics)
-  - [x] Keyword system across all entities (cards, relics, potions, powers, events, shop)
-  - [x] Catch-all overlay detection (prevents soft-locks on unhandled screens)
-  - [ ] Quality assurance and edge case handling
-- [ ] Multiplayer
-  - [ ] Authentication for multiplayer sessions
-- [ ] Additional API endpoints (e.g., run history, seed info)
+### Connect to Claude
 
-## Requirements
+Requires [Python 3.11+](https://www.python.org/) and [uv](https://docs.astral.sh/uv/).
 
-**To run the mod, you need:**
+**Claude Code** — add to your project's `.mcp.json`:
 
-- Slay the Spire 2 (Steam)
+```json
+{
+  "mcpServers": {
+    "sts2": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/STS2_MCP/mcp", "python", "server.py"]
+    }
+  }
+}
+```
 
-**To run both the mod and the MCP server, you will additionally need:**
+**Claude Desktop** — add to `claude_desktop_config.json` with the same config as above.
 
-- Python 3.11+ and [uv](https://docs.astral.sh/uv/) (for the MCP server)
+The MCP server accepts `--host` and `--port` flags if you need non-default settings.
 
-**To build the mod, you need:**:
+Full tool reference: [mcp/README.md](./mcp/README.md) | Raw HTTP API: [docs/raw_api.md](./docs/raw_api.md)
 
-- [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0) (for building the mod)
-- [PckPacker](https://docs.godotengine.org/en/stable/classes/class_pckpacker.html)
+## For Developers
 
-## Installation
-
-Copy `STS2_MCP.dll` and `STS2_MCP.pck` to `<game_install>/mods/`.
-
-Enable the mod in the game settings (a consent dialog will appear on first launch with mods present).
-
-## Building the Mod
-
-From the project root:
+### Build & Install
 
 ```bash
 ./build.sh
@@ -73,48 +57,17 @@ dotnet run --project tools/PckPacker/PckPacker.csproj -- out/STS2_MCP/STS2_MCP.p
 cp out/STS2_MCP/STS2_MCP.{dll,pck} "<game_install>/mods/"
 ```
 
-## MCP Server Setup
+Requires [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0).
 
-The Python MCP server bridges the mod's HTTP API to the MCP protocol (stdio transport), enabling Claude Desktop and Claude Code to interact with the game natively.
+### Features
 
-### Claude Code
+**Singleplayer** — full coverage of all game screens:
 
-Add to your project's `.mcp.json`:
+Combat (play cards, use potions, end turn, in-combat card selection), rewards (claim, pick/skip cards), map navigation (full DAG with lookahead), rest sites, shop, events & ancients, card selection overlays (transform, upgrade, remove), relic selection, treasure rooms, keyword glossary across all entities.
 
-```json
-{
-  "mcpServers": {
-    "sts2": {
-      "command": "uv",
-      "args": ["run", "--directory", "/path/to/STS2_MCP/mcp", "python", "server.py"]
-    }
-  }
-}
-```
+**Multiplayer (beta)** — all singleplayer features plus:
 
-### Claude Desktop
-
-Add to your Claude Desktop config (`claude_desktop_config.json`):
-
-```json
-{
-  "mcpServers": {
-    "sts2": {
-      "command": "uv",
-      "args": ["run", "--directory", "/path/to/STS2_MCP/mcp", "python", "server.py"]
-    }
-  }
-}
-```
-
-### MCP Server Options
-
-```
---host HOST   Game HTTP server host (default: localhost)
---port PORT   Game HTTP server port (default: 15526)
-```
-
-Documentation for MCP is at [mcp/README.md](./mcp/README.md).
+End-turn voting (submit/undo), map node voting, shared event voting, treasure relic bidding, all-players state summary, per-player ready/vote tracking. Endpoints are mutually guarded (singleplayer endpoint rejects multiplayer runs and vice versa).
 
 ## License
 

@@ -1,6 +1,12 @@
 # Raw API Reference
 
-These API endpoints are available for direct HTTP requests *without* using the MCP server. For example, you can use `curl` or Postman to interact with the mod directly at `http://localhost:15526/api/v1/singleplayer`.
+These API endpoints are available for direct HTTP requests *without* using the MCP server. For example, you can use `curl` or Postman to interact with the mod directly.
+
+The mod exposes two endpoints:
+- `http://localhost:15526/api/v1/singleplayer` — for singleplayer runs
+- `http://localhost:15526/api/v1/multiplayer` — for multiplayer (co-op) runs
+
+The endpoints are mutually exclusive: calling the singleplayer endpoint during a multiplayer run (or vice versa) returns HTTP 409.
 
 :::note
 These endpoints are designed for local use and do not have authentication or security measures, so they should not be exposed publicly - unless you know what you're doing!
@@ -252,3 +258,61 @@ All errors return:
   "error": "Description of what went wrong"
 }
 ```
+
+---
+
+## `GET /api/v1/multiplayer`
+
+Query parameters:
+| Parameter | Values | Default | Description |
+|-----------|--------|---------|-------------|
+| `format`  | `json`, `markdown` | `json` | Response format |
+
+Returns the multiplayer game state. Shares the same `state_type` values as singleplayer, with these additions:
+
+**Additional top-level fields:**
+- `game_mode`: always `"multiplayer"`
+- `net_type`: network service type (e.g., `"SteamMultiplayer"`)
+- `player_count`: number of players in the run
+- `local_player_slot`: index of the local player in the players array
+- `players`: summary of all players (character, HP, gold, alive status, local flag)
+
+**Battle state additions:**
+- `all_players_ready`: whether all players have submitted end turn
+- `players[]`: full state for the local player, summary (HP, block, energy, powers, relics, potions) for others
+- Each player entry includes `is_local`, `is_alive`, and `is_ready_to_end_turn`
+
+**Map state additions:**
+- `votes[]`: per-player map node votes (`player`, `is_local`, `voted`, `vote_col`, `vote_row`)
+- `all_voted`: whether all players have voted
+
+**Event state additions:**
+- `is_shared`: whether the event is a shared vote
+- `votes[]` (shared events only): per-player option votes
+- `all_voted`: whether all players have voted
+
+**Treasure state additions:**
+- `is_bidding_phase`: whether relics are revealed and bidding is active
+- `bids[]`: per-player relic bids (`player`, `is_local`, `voted`, `vote_relic_index`)
+- `all_bid`: whether all players have bid
+- Chest is NOT auto-opened (multiplayer sync manages this)
+
+## `POST /api/v1/multiplayer`
+
+Supports all the same actions as the singleplayer endpoint (play_card, use_potion, choose_map_node, etc.), plus these multiplayer-specific actions:
+
+**End turn (vote):**
+```json
+{ "action": "end_turn" }
+```
+- In multiplayer, this is a vote — the turn only ends when ALL players submit
+- Returns an error if already submitted (use `undo_end_turn` to retract first)
+
+**Undo end turn:**
+```json
+{ "action": "undo_end_turn" }
+```
+- Retracts the end-turn vote so the player can continue playing cards
+- Only works if the turn hasn't actually ended yet (i.e., not all players committed)
+
+All other actions (`play_card`, `use_potion`, `choose_map_node`, `choose_event_option`, etc.) work identically to their singleplayer counterparts but are routed through multiplayer sync.
