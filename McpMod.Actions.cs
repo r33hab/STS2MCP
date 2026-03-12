@@ -78,6 +78,8 @@ public static partial class McpMod
             return Error("Not in play phase — cannot act during enemy turn");
         if (CombatManager.Instance.PlayerActionsDisabled)
             return Error("Player actions are currently disabled");
+        if (!player.Creature.IsAlive)
+            return Error("Player creature is dead — cannot play cards");
 
         var combatState = player.Creature.CombatState;
         if (combatState == null)
@@ -131,6 +133,11 @@ public static partial class McpMod
             return Error("Not in play phase — cannot act during enemy turn");
         if (CombatManager.Instance.PlayerActionsDisabled)
             return Error("Player actions are currently disabled (turn may already be ending)");
+
+        // Match the game's own CanTurnBeEnded guard (NEndTurnButton.cs:114-123)
+        var hand = NCombatRoom.Instance?.Ui?.Hand;
+        if (hand != null && (hand.InCardPlay || hand.CurrentMode != NPlayerHand.Mode.Play))
+            return Error("Cannot end turn while a card is being played or hand is in selection mode");
 
         PlayerCmd.EndTurn(player, canBackOut: false);
 

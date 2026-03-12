@@ -16,22 +16,48 @@ mcp = FastMCP("sts2")
 _base_url: str = "http://localhost:15526"
 
 
-def _api_url() -> str:
+def _sp_url() -> str:
     return f"{_base_url}/api/v1/singleplayer"
+
+
+def _mp_url() -> str:
+    return f"{_base_url}/api/v1/multiplayer"
 
 
 async def _get(params: dict | None = None) -> str:
     async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.get(_api_url(), params=params)
+        r = await client.get(_sp_url(), params=params)
         r.raise_for_status()
         return r.text
 
 
 async def _post(body: dict) -> str:
     async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.post(_api_url(), json=body)
+        r = await client.post(_sp_url(), json=body)
         r.raise_for_status()
         return r.text
+
+
+async def _mp_get(params: dict | None = None) -> str:
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.get(_mp_url(), params=params)
+        r.raise_for_status()
+        return r.text
+
+
+async def _mp_post(body: dict) -> str:
+    async with httpx.AsyncClient(timeout=10) as client:
+        r = await client.post(_mp_url(), json=body)
+        r.raise_for_status()
+        return r.text
+
+
+def _handle_error(e: Exception) -> str:
+    if isinstance(e, httpx.ConnectError):
+        return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
+    if isinstance(e, httpx.HTTPStatusError):
+        return f"Error: HTTP {e.response.status_code} — {e.response.text}"
+    return f"Error: {e}"
 
 
 # ---------------------------------------------------------------------------
@@ -51,12 +77,8 @@ async def get_game_state(format: str = "markdown") -> str:
     """
     try:
         return await _get({"format": format})
-    except httpx.ConnectError:
-        return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
-    except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} — {e.response.text}"
     except Exception as e:
-        return f"Error: {e}"
+        return _handle_error(e)
 
 
 @mcp.tool()
@@ -67,19 +89,15 @@ async def use_potion(slot: int, target: str | None = None) -> str:
 
     Args:
         slot: Potion slot index (as shown in game state).
-        target: Entity ID of the target enemy (e.g. "jaw_worm_0"). Required for enemy-targeted potions.
+        target: Entity ID of the target enemy (e.g. "JAW_WORM_0"). Required for enemy-targeted potions.
     """
     body: dict = {"action": "use_potion", "slot": slot}
     if target is not None:
         body["target"] = target
     try:
         return await _post(body)
-    except httpx.ConnectError:
-        return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
-    except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} — {e.response.text}"
     except Exception as e:
-        return f"Error: {e}"
+        return _handle_error(e)
 
 
 @mcp.tool()
@@ -91,12 +109,8 @@ async def proceed_to_map() -> str:
     """
     try:
         return await _post({"action": "proceed"})
-    except httpx.ConnectError:
-        return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
-    except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} — {e.response.text}"
     except Exception as e:
-        return f"Error: {e}"
+        return _handle_error(e)
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +124,7 @@ async def combat_play_card(card_index: int, target: str | None = None) -> str:
 
     Args:
         card_index: Index of the card in hand (0-based, as shown in game state).
-        target: Entity ID of the target enemy (e.g. "jaw_worm_0"). Required for single-target cards.
+        target: Entity ID of the target enemy (e.g. "JAW_WORM_0"). Required for single-target cards.
 
     Note that the index can change as cards are played - playing a card will shift the indices of remaining cards in hand.
     Refer to the latest game state for accurate indices. New cards are drawn to the right, so playing cards from right to left can help maintain more stable indices for remaining cards.
@@ -120,12 +134,8 @@ async def combat_play_card(card_index: int, target: str | None = None) -> str:
         body["target"] = target
     try:
         return await _post(body)
-    except httpx.ConnectError:
-        return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
-    except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} — {e.response.text}"
     except Exception as e:
-        return f"Error: {e}"
+        return _handle_error(e)
 
 
 @mcp.tool()
@@ -133,12 +143,8 @@ async def combat_end_turn() -> str:
     """[Combat] End the player's current turn."""
     try:
         return await _post({"action": "end_turn"})
-    except httpx.ConnectError:
-        return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
-    except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} — {e.response.text}"
     except Exception as e:
-        return f"Error: {e}"
+        return _handle_error(e)
 
 
 # ---------------------------------------------------------------------------
@@ -156,15 +162,10 @@ async def combat_select_card(card_index: int) -> str:
     Args:
         card_index: 0-based index of the card in the selectable hand cards (as shown in game state).
     """
-    body: dict = {"action": "combat_select_card", "card_index": card_index}
     try:
-        return await _post(body)
-    except httpx.ConnectError:
-        return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
-    except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} — {e.response.text}"
+        return await _post({"action": "combat_select_card", "card_index": card_index})
     except Exception as e:
-        return f"Error: {e}"
+        return _handle_error(e)
 
 
 @mcp.tool()
@@ -176,12 +177,8 @@ async def combat_confirm_selection() -> str:
     """
     try:
         return await _post({"action": "combat_confirm_selection"})
-    except httpx.ConnectError:
-        return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
-    except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} — {e.response.text}"
     except Exception as e:
-        return f"Error: {e}"
+        return _handle_error(e)
 
 
 # ---------------------------------------------------------------------------
@@ -202,15 +199,10 @@ async def rewards_claim(reward_index: int) -> str:
     Note that claiming a reward may change the indices of remaining rewards, so refer to the latest game state for accurate indices.
     Claiming from right to left can help maintain more stable indices for remaining rewards, as rewards will always shift left to fill in gaps.
     """
-    body: dict = {"action": "claim_reward", "index": reward_index}
     try:
-        return await _post(body)
-    except httpx.ConnectError:
-        return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
-    except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} — {e.response.text}"
+        return await _post({"action": "claim_reward", "index": reward_index})
     except Exception as e:
-        return f"Error: {e}"
+        return _handle_error(e)
 
 
 @mcp.tool()
@@ -220,15 +212,10 @@ async def rewards_pick_card(card_index: int) -> str:
     Args:
         card_index: 0-based index of the card to add to the deck.
     """
-    body: dict = {"action": "select_card_reward", "card_index": card_index}
     try:
-        return await _post(body)
-    except httpx.ConnectError:
-        return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
-    except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} — {e.response.text}"
+        return await _post({"action": "select_card_reward", "card_index": card_index})
     except Exception as e:
-        return f"Error: {e}"
+        return _handle_error(e)
 
 
 @mcp.tool()
@@ -236,12 +223,8 @@ async def rewards_skip_card() -> str:
     """[Rewards] Skip the card reward without selecting a card."""
     try:
         return await _post({"action": "skip_card_reward"})
-    except httpx.ConnectError:
-        return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
-    except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} — {e.response.text}"
     except Exception as e:
-        return f"Error: {e}"
+        return _handle_error(e)
 
 
 # ---------------------------------------------------------------------------
@@ -256,15 +239,10 @@ async def map_choose_node(node_index: int) -> str:
     Args:
         node_index: 0-based index of the node from the next_options list.
     """
-    body: dict = {"action": "choose_map_node", "index": node_index}
     try:
-        return await _post(body)
-    except httpx.ConnectError:
-        return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
-    except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} — {e.response.text}"
+        return await _post({"action": "choose_map_node", "index": node_index})
     except Exception as e:
-        return f"Error: {e}"
+        return _handle_error(e)
 
 
 # ---------------------------------------------------------------------------
@@ -279,15 +257,10 @@ async def rest_choose_option(option_index: int) -> str:
     Args:
         option_index: 0-based index of the option from the rest site state.
     """
-    body: dict = {"action": "choose_rest_option", "index": option_index}
     try:
-        return await _post(body)
-    except httpx.ConnectError:
-        return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
-    except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} — {e.response.text}"
+        return await _post({"action": "choose_rest_option", "index": option_index})
     except Exception as e:
-        return f"Error: {e}"
+        return _handle_error(e)
 
 
 # ---------------------------------------------------------------------------
@@ -302,15 +275,10 @@ async def shop_purchase(item_index: int) -> str:
     Args:
         item_index: 0-based index of the item from the shop state.
     """
-    body: dict = {"action": "shop_purchase", "index": item_index}
     try:
-        return await _post(body)
-    except httpx.ConnectError:
-        return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
-    except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} — {e.response.text}"
+        return await _post({"action": "shop_purchase", "index": item_index})
     except Exception as e:
-        return f"Error: {e}"
+        return _handle_error(e)
 
 
 # ---------------------------------------------------------------------------
@@ -328,15 +296,10 @@ async def event_choose_option(option_index: int) -> str:
     Args:
         option_index: 0-based index of the unlocked option.
     """
-    body: dict = {"action": "choose_event_option", "index": option_index}
     try:
-        return await _post(body)
-    except httpx.ConnectError:
-        return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
-    except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} — {e.response.text}"
+        return await _post({"action": "choose_event_option", "index": option_index})
     except Exception as e:
-        return f"Error: {e}"
+        return _handle_error(e)
 
 
 @mcp.tool()
@@ -347,12 +310,8 @@ async def event_advance_dialogue() -> str:
     """
     try:
         return await _post({"action": "advance_dialogue"})
-    except httpx.ConnectError:
-        return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
-    except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} — {e.response.text}"
     except Exception as e:
-        return f"Error: {e}"
+        return _handle_error(e)
 
 
 # ---------------------------------------------------------------------------
@@ -372,15 +331,10 @@ async def deck_select_card(card_index: int) -> str:
     Args:
         card_index: 0-based index of the card (as shown in game state).
     """
-    body: dict = {"action": "select_card", "index": card_index}
     try:
-        return await _post(body)
-    except httpx.ConnectError:
-        return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
-    except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} — {e.response.text}"
+        return await _post({"action": "select_card", "index": card_index})
     except Exception as e:
-        return f"Error: {e}"
+        return _handle_error(e)
 
 
 @mcp.tool()
@@ -393,12 +347,8 @@ async def deck_confirm_selection() -> str:
     """
     try:
         return await _post({"action": "confirm_selection"})
-    except httpx.ConnectError:
-        return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
-    except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} — {e.response.text}"
     except Exception as e:
-        return f"Error: {e}"
+        return _handle_error(e)
 
 
 @mcp.tool()
@@ -411,12 +361,8 @@ async def deck_cancel_selection() -> str:
     """
     try:
         return await _post({"action": "cancel_selection"})
-    except httpx.ConnectError:
-        return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
-    except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} — {e.response.text}"
     except Exception as e:
-        return f"Error: {e}"
+        return _handle_error(e)
 
 
 # ---------------------------------------------------------------------------
@@ -433,15 +379,10 @@ async def relic_select(relic_index: int) -> str:
     Args:
         relic_index: 0-based index of the relic (as shown in game state).
     """
-    body: dict = {"action": "select_relic", "index": relic_index}
     try:
-        return await _post(body)
-    except httpx.ConnectError:
-        return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
-    except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} — {e.response.text}"
+        return await _post({"action": "select_relic", "index": relic_index})
     except Exception as e:
-        return f"Error: {e}"
+        return _handle_error(e)
 
 
 @mcp.tool()
@@ -449,12 +390,8 @@ async def relic_skip() -> str:
     """[Relic Selection] Skip the relic selection without choosing a relic."""
     try:
         return await _post({"action": "skip_relic_selection"})
-    except httpx.ConnectError:
-        return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
-    except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} — {e.response.text}"
     except Exception as e:
-        return f"Error: {e}"
+        return _handle_error(e)
 
 
 # ---------------------------------------------------------------------------
@@ -472,15 +409,304 @@ async def treasure_claim_relic(relic_index: int) -> str:
     Args:
         relic_index: 0-based index of the relic (as shown in game state).
     """
-    body: dict = {"action": "claim_treasure_relic", "index": relic_index}
     try:
-        return await _post(body)
-    except httpx.ConnectError:
-        return "Error: Cannot connect to STS2_MCP mod. Is the game running with the mod enabled?"
-    except httpx.HTTPStatusError as e:
-        return f"Error: HTTP {e.response.status_code} — {e.response.text}"
+        return await _post({"action": "claim_treasure_relic", "index": relic_index})
     except Exception as e:
-        return f"Error: {e}"
+        return _handle_error(e)
+
+
+# ===========================================================================
+# MULTIPLAYER tools — all route through /api/v1/multiplayer
+# ===========================================================================
+
+
+@mcp.tool()
+async def mp_get_game_state(format: str = "markdown") -> str:
+    """[Multiplayer] Get the current multiplayer game state.
+
+    Returns full game state for ALL players: HP, powers, relics, potions,
+    plus multiplayer-specific data: map votes, event votes, treasure bids,
+    end-turn ready status. Only works during a multiplayer run.
+
+    Args:
+        format: "markdown" for human-readable output, "json" for structured data.
+    """
+    try:
+        return await _mp_get({"format": format})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def mp_combat_play_card(card_index: int, target: str | None = None) -> str:
+    """[Multiplayer Combat] Play a card from the local player's hand.
+
+    Same as singleplayer combat_play_card but routed through the multiplayer
+    endpoint for sync safety.
+
+    Args:
+        card_index: Index of the card in hand (0-based).
+        target: Entity ID of the target enemy (e.g. "JAW_WORM_0"). Required for single-target cards.
+    """
+    body: dict = {"action": "play_card", "card_index": card_index}
+    if target is not None:
+        body["target"] = target
+    try:
+        return await _mp_post(body)
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def mp_combat_end_turn() -> str:
+    """[Multiplayer Combat] Submit end-turn vote.
+
+    In multiplayer, ending the turn is a VOTE — the turn only ends when ALL
+    players have submitted. Use mp_combat_undo_end_turn() to retract.
+    """
+    try:
+        return await _mp_post({"action": "end_turn"})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def mp_combat_undo_end_turn() -> str:
+    """[Multiplayer Combat] Retract end-turn vote.
+
+    If you submitted end turn but want to play more cards, use this to undo.
+    Only works if other players haven't all committed yet.
+    """
+    try:
+        return await _mp_post({"action": "undo_end_turn"})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def mp_use_potion(slot: int, target: str | None = None) -> str:
+    """[Multiplayer] Use a potion from the local player's potion slots.
+
+    Args:
+        slot: Potion slot index (as shown in game state).
+        target: Entity ID of the target enemy. Required for enemy-targeted potions.
+    """
+    body: dict = {"action": "use_potion", "slot": slot}
+    if target is not None:
+        body["target"] = target
+    try:
+        return await _mp_post(body)
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def mp_map_vote(node_index: int) -> str:
+    """[Multiplayer Map] Vote for a map node to travel to.
+
+    In multiplayer, map selection is a vote — travel happens when all players
+    agree. Re-voting for the same node sends a ping to other players.
+
+    Args:
+        node_index: 0-based index of the node from the next_options list.
+    """
+    try:
+        return await _mp_post({"action": "choose_map_node", "index": node_index})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def mp_event_choose_option(option_index: int) -> str:
+    """[Multiplayer Event] Choose or vote for an event option.
+
+    For shared events: this is a vote (resolves when all players vote).
+    For individual events: immediate choice, same as singleplayer.
+
+    Args:
+        option_index: 0-based index of the unlocked option.
+    """
+    try:
+        return await _mp_post({"action": "choose_event_option", "index": option_index})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def mp_event_advance_dialogue() -> str:
+    """[Multiplayer Event] Advance ancient event dialogue."""
+    try:
+        return await _mp_post({"action": "advance_dialogue"})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def mp_rest_choose_option(option_index: int) -> str:
+    """[Multiplayer Rest Site] Choose a rest site option (rest, smith, etc.).
+
+    Per-player choice — no voting needed.
+
+    Args:
+        option_index: 0-based index of the option.
+    """
+    try:
+        return await _mp_post({"action": "choose_rest_option", "index": option_index})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def mp_shop_purchase(item_index: int) -> str:
+    """[Multiplayer Shop] Purchase an item from the shop.
+
+    Per-player inventory — no voting needed.
+
+    Args:
+        item_index: 0-based index of the item.
+    """
+    try:
+        return await _mp_post({"action": "shop_purchase", "index": item_index})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def mp_rewards_claim(reward_index: int) -> str:
+    """[Multiplayer Rewards] Claim a reward from the post-combat rewards screen.
+
+    Args:
+        reward_index: 0-based index of the reward.
+    """
+    try:
+        return await _mp_post({"action": "claim_reward", "index": reward_index})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def mp_rewards_pick_card(card_index: int) -> str:
+    """[Multiplayer Rewards] Select a card from the card reward screen.
+
+    Args:
+        card_index: 0-based index of the card to add to the deck.
+    """
+    try:
+        return await _mp_post({"action": "select_card_reward", "card_index": card_index})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def mp_rewards_skip_card() -> str:
+    """[Multiplayer Rewards] Skip the card reward."""
+    try:
+        return await _mp_post({"action": "skip_card_reward"})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def mp_proceed_to_map() -> str:
+    """[Multiplayer] Proceed from the current screen to the map.
+
+    Works from: rewards screen, rest site, shop.
+    """
+    try:
+        return await _mp_post({"action": "proceed"})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def mp_deck_select_card(card_index: int) -> str:
+    """[Multiplayer Card Selection] Select or deselect a card in the card selection screen.
+
+    Args:
+        card_index: 0-based index of the card.
+    """
+    try:
+        return await _mp_post({"action": "select_card", "index": card_index})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def mp_deck_confirm_selection() -> str:
+    """[Multiplayer Card Selection] Confirm the current card selection."""
+    try:
+        return await _mp_post({"action": "confirm_selection"})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def mp_deck_cancel_selection() -> str:
+    """[Multiplayer Card Selection] Cancel the current card selection."""
+    try:
+        return await _mp_post({"action": "cancel_selection"})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def mp_combat_select_card(card_index: int) -> str:
+    """[Multiplayer Combat Selection] Select a card from hand during in-combat card selection.
+
+    Args:
+        card_index: 0-based index of the card in the selectable hand cards.
+    """
+    try:
+        return await _mp_post({"action": "combat_select_card", "card_index": card_index})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def mp_combat_confirm_selection() -> str:
+    """[Multiplayer Combat Selection] Confirm the in-combat card selection."""
+    try:
+        return await _mp_post({"action": "combat_confirm_selection"})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def mp_relic_select(relic_index: int) -> str:
+    """[Multiplayer Relic Selection] Select a relic (boss relic rewards).
+
+    Args:
+        relic_index: 0-based index of the relic.
+    """
+    try:
+        return await _mp_post({"action": "select_relic", "index": relic_index})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def mp_relic_skip() -> str:
+    """[Multiplayer Relic Selection] Skip the relic selection."""
+    try:
+        return await _mp_post({"action": "skip_relic_selection"})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def mp_treasure_claim_relic(relic_index: int) -> str:
+    """[Multiplayer Treasure] Bid on / claim a relic from the treasure chest.
+
+    In multiplayer, this is a bid — if multiple players pick the same relic,
+    a "relic fight" determines the winner. Others get consolation prizes.
+
+    Args:
+        relic_index: 0-based index of the relic.
+    """
+    try:
+        return await _mp_post({"action": "claim_treasure_relic", "index": relic_index})
+    except Exception as e:
+        return _handle_error(e)
 
 
 def main():

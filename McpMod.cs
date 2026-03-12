@@ -11,6 +11,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Godot;
 using MegaCrit.Sts2.Core.Modding;
+using MegaCrit.Sts2.Core.Multiplayer.Game;
 
 namespace STS2_MCP;
 
@@ -130,10 +131,36 @@ public static partial class McpMod
             }
             else if (path == "/api/v1/singleplayer")
             {
+                // Hard-block singleplayer endpoint during multiplayer runs
+                // to prevent calling the non-sync-safe end_turn path
+                if (IsMultiplayerRun())
+                {
+                    SendError(response, 409,
+                        "Multiplayer run is active. Use /api/v1/multiplayer instead.");
+                    return;
+                }
+
                 if (request.HttpMethod == "GET")
                     HandleGetState(request, response);
                 else if (request.HttpMethod == "POST")
                     HandlePostAction(request, response);
+                else
+                    SendError(response, 405, "Method not allowed");
+            }
+            else if (path == "/api/v1/multiplayer")
+            {
+                // Guard: reject multiplayer endpoint during singleplayer runs
+                if (!IsMultiplayerRun())
+                {
+                    SendError(response, 409,
+                        "Not in a multiplayer run. Use /api/v1/singleplayer instead.");
+                    return;
+                }
+
+                if (request.HttpMethod == "GET")
+                    HandleGetMultiplayerState(request, response);
+                else if (request.HttpMethod == "POST")
+                    HandlePostMultiplayerAction(request, response);
                 else
                     SendError(response, 405, "Method not allowed");
             }
@@ -149,6 +176,81 @@ public static partial class McpMod
                 SendError(context.Response, 500, $"Internal error: {ex.Message}");
             }
             catch { /* response may already be closed */ }
+        }
+    }
+
+    // Called on HTTP thread (not main thread) as a best-effort guard.
+    // The try/catch handles race conditions during run transitions.
+    // Authoritative checks happen inside RunOnMainThread lambdas.
+    internal static bool IsMultiplayerRun()
+    {
+        try
+        {
+            return MegaCrit.Sts2.Core.Runs.RunManager.Instance.IsInProgress
+                && MegaCrit.Sts2.Core.Runs.RunManager.Instance.NetService.Type.IsMultiplayer();
+        }
+        catch { return false; }
+    }
+
+    private static void HandleGetMultiplayerState(HttpListenerRequest request, HttpListenerResponse response)
+    {
+        string format = request.QueryString["format"] ?? "json";
+
+        try
+        {
+            var stateTask = RunOnMainThread(() => BuildMultiplayerGameState());
+            var state = stateTask.GetAwaiter().GetResult();
+
+            if (format == "markdown")
+            {
+                string md = FormatAsMarkdown(state);
+                SendText(response, md, "text/markdown");
+            }
+            else
+            {
+                SendJson(response, state);
+            }
+        }
+        catch (Exception ex)
+        {
+            SendError(response, 500, $"Failed to read multiplayer game state: {ex.Message}");
+        }
+    }
+
+    private static void HandlePostMultiplayerAction(HttpListenerRequest request, HttpListenerResponse response)
+    {
+        string body;
+        using (var reader = new StreamReader(request.InputStream, request.ContentEncoding))
+            body = reader.ReadToEnd();
+
+        Dictionary<string, JsonElement>? parsed;
+        try
+        {
+            parsed = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(body);
+        }
+        catch
+        {
+            SendError(response, 400, "Invalid JSON");
+            return;
+        }
+
+        if (parsed == null || !parsed.TryGetValue("action", out var actionElem))
+        {
+            SendError(response, 400, "Missing 'action' field");
+            return;
+        }
+
+        string action = actionElem.GetString() ?? "";
+
+        try
+        {
+            var resultTask = RunOnMainThread(() => ExecuteMultiplayerAction(action, parsed));
+            var result = resultTask.GetAwaiter().GetResult();
+            SendJson(response, result);
+        }
+        catch (Exception ex)
+        {
+            SendError(response, 500, $"Multiplayer action failed: {ex.Message}");
         }
     }
 
