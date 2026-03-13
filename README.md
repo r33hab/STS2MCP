@@ -45,19 +45,7 @@ Full tool reference: [mcp/README.md](./mcp/README.md) | Raw HTTP API: [docs/raw_
 
 ### Build & Install
 
-```bash
-./build.sh
-```
-
-Or manually:
-
-```bash
-dotnet build STS2_MCP/STS2_MCP.csproj -c Release -o out/STS2_MCP
-dotnet run --project tools/PckPacker/PckPacker.csproj -- out/STS2_MCP/STS2_MCP.pck "" STS2_MCP/mod_manifest.json
-cp out/STS2_MCP/STS2_MCP.{dll,pck} "<game_install>/mods/"
-```
-
-Requires [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0).
+Build the DLL, pack into a PCK, and copy both to `<game_install>/mods/`. Requires [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0).
 
 ### Features
 
