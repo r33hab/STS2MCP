@@ -58,8 +58,3 @@
 - Not checking card indices after playing — indices shift left.
 - Taking too long to kill bosses — enemies scale every turn.
 - Adding mediocre cards that dilute the deck before boss fights.
-
----
-
-## Per-Hero Guides
-See `GUIDE.md` for hero-specific strategy (The Regent, etc.).

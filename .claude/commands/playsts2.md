@@ -1,7 +1,7 @@
 Play Slay the Spire 2 using the MCP tools (`mcp__sts2__*`). Your goal is to play as well as possible and win the run.
 
 ## Setup
-1. Read `CLAUDE.md` for general strategy and MCP calling tips.
+1. Read `AGENTS.md` for general strategy and MCP calling tips.
 2. Read `GUIDE.md` for hero-specific strategies. If the current hero isn't covered, adapt and add notes after boss fights.
 3. Call `get_game_state(format="markdown")` to see the current state and begin playing.
 
