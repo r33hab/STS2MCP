@@ -2,7 +2,7 @@
 
 A mod for [**Slay the Spire 2**](https://store.steampowered.com/app/2868840/Slay_the_Spire_2/) that lets AI agents play the game. Exposes game state and actions via a localhost REST API, with an optional MCP server for Claude Desktop / Claude Code integration.
 
-Singleplayer and multiplayer (co-op) supported. Tested against STS2 `v0.98.3`.
+Singleplayer and multiplayer (co-op) supported. Tested against STS2 `v0.99.1`.
 
 > [!warning]
 > This mod allows external programs to read and control your game via a localhost API. Use at your own risk with runs you care less about.
@@ -14,7 +14,7 @@ Singleplayer and multiplayer (co-op) supported. Tested against STS2 `v0.98.3`.
 
 ### Install
 
-1. Copy `STS2_MCP.dll` and `STS2_MCP.pck` to `<game_install>/mods/`
+1. Copy `STS2_MCP.dll` and `STS2_MCP.json` to `<game_install>/mods/`
 2. Launch the game and enable mods in settings (a consent dialog appears on first launch)
 3. The mod starts an HTTP server on `localhost:15526` automatically
 
@@ -45,7 +45,7 @@ Full tool reference: [mcp/README.md](./mcp/README.md) | Raw HTTP API: [docs/raw_
 
 ### Build & Install
 
-Build the DLL, pack into a PCK, and copy both to `<game_install>/mods/`. Requires [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0).
+Build the DLL and copy it along with the manifest JSON to `<game_install>/mods/`. Requires [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0).
 
 ### Features
 
