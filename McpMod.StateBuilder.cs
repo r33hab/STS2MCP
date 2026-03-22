@@ -996,7 +996,7 @@ public static partial class McpMod
         // (covers subclasses like NDeckEnchantSelectScreen)
         if (!canConfirm)
         {
-            canConfirm = FindAll<NConfirmButton>(screen).Any(b => b.IsEnabled && b.Visible);
+            canConfirm = FindAll<NConfirmButton>(screen).Any(b => b.IsEnabled && b.IsVisibleInTree());
         }
         state["can_confirm"] = canConfirm;
 

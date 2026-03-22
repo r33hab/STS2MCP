@@ -600,7 +600,7 @@ public static partial class McpMod
         var allConfirmButtons = FindAll<NConfirmButton>(screen);
         foreach (var btn in allConfirmButtons)
         {
-            if (btn.IsEnabled && btn.Visible)
+            if (btn.IsEnabled && btn.IsVisibleInTree())
             {
                 btn.ForceClick();
                 return new Dictionary<string, object?>
