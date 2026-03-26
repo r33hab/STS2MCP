@@ -45,12 +45,33 @@ public static partial class McpMod
             sb.AppendLine();
         }
 
+        // Top-level player summary (non-combat singleplayer only; combat renders its own detailed view)
+        bool hasBattle = state.ContainsKey("battle");
+        if (!isMultiplayer && !hasBattle
+            && state.TryGetValue("player", out var topPlayerObj) && topPlayerObj is Dictionary<string, object?> topPlayer)
+        {
+            sb.AppendLine("## Player (You)");
+            string stars = topPlayer.TryGetValue("stars", out var s) && s != null ? $" | Stars: {s}" : "";
+            sb.AppendLine($"**{topPlayer["character"]}** — HP: {topPlayer["hp"]}/{topPlayer["max_hp"]} | Gold: {topPlayer["gold"]}{stars}");
+            sb.AppendLine();
+
+            FormatListSection(sb, "Relics", topPlayer, "relics", r =>
+            {
+                string counter = r.TryGetValue("counter", out var c) && c != null ? $" [{c}]" : "";
+                return $"- **{r["name"]}**{counter}: {r["description"]}";
+            });
+            FormatListSection(sb, "Potions", topPlayer, "potions", p => $"- [{p["slot"]}] **{p["name"]}**: {p["description"]}");
+        }
+
         if (state.TryGetValue("battle", out var battleObj) && battleObj is Dictionary<string, object?> battle)
         {
             if (isMultiplayer)
                 FormatMultiplayerBattleMarkdown(sb, battle);
             else
-                FormatBattleMarkdown(sb, battle);
+            {
+                var battlePlayer = state.TryGetValue("player", out var bp) && bp is Dictionary<string, object?> bpd ? bpd : null;
+                FormatBattleMarkdown(sb, battle, battlePlayer);
+            }
         }
 
         if (state.TryGetValue("event", out var eventObj) && eventObj is Dictionary<string, object?> eventData)
@@ -130,12 +151,12 @@ public static partial class McpMod
         return sb.ToString();
     }
 
-    private static void FormatBattleMarkdown(StringBuilder sb, Dictionary<string, object?> battle)
+    private static void FormatBattleMarkdown(StringBuilder sb, Dictionary<string, object?> battle, Dictionary<string, object?>? player)
     {
         sb.AppendLine($"**Round {battle["round"]}** | Turn: {battle["turn"]} | Play Phase: {battle["is_play_phase"]}");
         sb.AppendLine();
 
-        if (battle.TryGetValue("player", out var playerObj) && playerObj is Dictionary<string, object?> player)
+        if (player != null)
         {
             sb.AppendLine("## Player (You)");
             string stars = player.TryGetValue("stars", out var s) && s != null ? $" | Stars: {s}" : "";
@@ -252,12 +273,6 @@ public static partial class McpMod
         sb.AppendLine($"## {(isAncient ? "Ancient" : "Event")}: {name}");
         sb.AppendLine();
 
-        if (evt.TryGetValue("player", out var playerObj) && playerObj is Dictionary<string, object?> player)
-        {
-            sb.AppendLine($"**{player["character"]}** — HP: {player["hp"]}/{player["max_hp"]} | Gold: {player["gold"]}");
-            sb.AppendLine();
-        }
-
         bool inDialogue = evt.TryGetValue("in_dialogue", out var d) && d is true;
         if (inDialogue)
         {
@@ -290,13 +305,6 @@ public static partial class McpMod
 
     private static void FormatRestSiteMarkdown(StringBuilder sb, Dictionary<string, object?> restSite)
     {
-        if (restSite.TryGetValue("player", out var playerObj) && playerObj is Dictionary<string, object?> player)
-        {
-            sb.AppendLine("## Player (You)");
-            sb.AppendLine($"**{player["character"]}** — HP: {player["hp"]}/{player["max_hp"]} | Gold: {player["gold"]}");
-            sb.AppendLine();
-        }
-
         if (restSite.TryGetValue("options", out var optObj) && optObj is List<Dictionary<string, object?>> options && options.Count > 0)
         {
             sb.AppendLine("## Rest Site Options");
@@ -315,13 +323,6 @@ public static partial class McpMod
 
     private static void FormatShopMarkdown(StringBuilder sb, Dictionary<string, object?> shop)
     {
-        if (shop.TryGetValue("player", out var playerObj) && playerObj is Dictionary<string, object?> player)
-        {
-            sb.AppendLine("## Player (You)");
-            sb.AppendLine($"**{player["character"]}** — HP: {player["hp"]}/{player["max_hp"]} | Gold: {player["gold"]} | Potion slots: {player["open_potion_slots"]}/{player["potion_slots"]} open");
-            sb.AppendLine();
-        }
-
         if (shop.TryGetValue("items", out var itemsObj) && itemsObj is List<Dictionary<string, object?>> items)
         {
             sb.AppendLine("## Shop Inventory");
@@ -362,14 +363,6 @@ public static partial class McpMod
 
     private static void FormatMapMarkdown(StringBuilder sb, Dictionary<string, object?> map)
     {
-        // Player summary
-        if (map.TryGetValue("player", out var playerObj) && playerObj is Dictionary<string, object?> player)
-        {
-            sb.AppendLine("## Player (You)");
-            sb.AppendLine($"**{player["character"]}** — HP: {player["hp"]}/{player["max_hp"]} | Gold: {player["gold"]} | Potion slots: {player["open_potion_slots"]}/{player["potion_slots"]} open");
-            sb.AppendLine();
-        }
-
         // Path taken
         if (map.TryGetValue("visited", out var visitedObj) && visitedObj is List<Dictionary<string, object?>> visited && visited.Count > 0)
         {
@@ -456,13 +449,6 @@ public static partial class McpMod
 
     private static void FormatRewardsMarkdown(StringBuilder sb, Dictionary<string, object?> rewards)
     {
-        if (rewards.TryGetValue("player", out var playerObj) && playerObj is Dictionary<string, object?> player)
-        {
-            sb.AppendLine("## Player (You)");
-            sb.AppendLine($"**{player["character"]}** — HP: {player["hp"]}/{player["max_hp"]} | Gold: {player["gold"]} | Potion slots: {player["open_potion_slots"]}/{player["potion_slots"]} open");
-            sb.AppendLine();
-        }
-
         if (rewards.TryGetValue("items", out var itemsObj) && itemsObj is List<Dictionary<string, object?>> items && items.Count > 0)
         {
             sb.AppendLine("## Rewards");
@@ -518,12 +504,6 @@ public static partial class McpMod
         if (relicSelect.TryGetValue("prompt", out var p) && p != null)
             sb.AppendLine($"*{p}*");
         sb.AppendLine();
-
-        if (relicSelect.TryGetValue("player", out var playerObj) && playerObj is Dictionary<string, object?> player)
-        {
-            sb.AppendLine($"**{player["character"]}** — HP: {player["hp"]}/{player["max_hp"]} | Gold: {player["gold"]}");
-            sb.AppendLine();
-        }
 
         if (relicSelect.TryGetValue("relics", out var relicsObj) && relicsObj is List<Dictionary<string, object?>> relics)
         {
@@ -592,12 +572,6 @@ public static partial class McpMod
         }
         sb.AppendLine();
 
-        if (cardSelect.TryGetValue("player", out var playerObj) && playerObj is Dictionary<string, object?> player)
-        {
-            sb.AppendLine($"**{player["character"]}** — HP: {player["hp"]}/{player["max_hp"]} | Gold: {player["gold"]}");
-            sb.AppendLine();
-        }
-
         if (cardSelect.TryGetValue("cards", out var cardsObj) && cardsObj is List<Dictionary<string, object?>> cards)
         {
             sb.AppendLine("### Cards");
@@ -621,13 +595,6 @@ public static partial class McpMod
 
     private static void FormatTreasureMarkdown(StringBuilder sb, Dictionary<string, object?> treasure)
     {
-        if (treasure.TryGetValue("player", out var playerObj) && playerObj is Dictionary<string, object?> player)
-        {
-            sb.AppendLine("## Player (You)");
-            sb.AppendLine($"**{player["character"]}** — HP: {player["hp"]}/{player["max_hp"]} | Gold: {player["gold"]}");
-            sb.AppendLine();
-        }
-
         if (treasure.TryGetValue("relics", out var relicsObj) && relicsObj is List<Dictionary<string, object?>> relics && relics.Count > 0)
         {
             sb.AppendLine("## Treasure Relics");
