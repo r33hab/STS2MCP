@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/teaser.png" alt="STS2 MCP" />
+  <img src="docs/teaser.png" alt="STS2 MCP" width="90%" />
 </p>
 
 <p align="center"><em>An Experimental Research Project to Fully-Automate your Slay the Spire 2 Runs</em></p>
