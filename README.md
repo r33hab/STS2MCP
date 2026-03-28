@@ -1,4 +1,8 @@
-# Slay The Spire 2 - MCP Server
+<p align="center">
+  <img src="docs/teaser.png" alt="STS2 MCP" />
+</p>
+
+<p align="center"><em>An Experimental Research Project to Fully-Automate your Slay the Spire 2 Runs</em></p>
 
 A mod for [**Slay the Spire 2**](https://store.steampowered.com/app/2868840/Slay_the_Spire_2/) that lets AI agents play the game. Exposes game state and actions via a localhost REST API, with an optional MCP server for Claude Desktop / Claude Code integration.
 
