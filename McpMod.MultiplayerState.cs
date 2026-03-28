@@ -177,8 +177,10 @@ public static partial class McpMod
             else
             {
                 var merchUI = NMerchantRoom.Instance;
-                if (merchUI != null && !merchUI.Inventory.IsOpen)
+                if (merchUI?.Inventory != null && !merchUI.Inventory.IsOpen)
+                {
                     merchUI.OpenInventory();
+                }
 
                 result["state_type"] = "shop";
                 result["shop"] = BuildShopState(merchantRoom, runState);
@@ -420,7 +422,7 @@ public static partial class McpMod
         state["max_hp"] = creature.MaxHp;
         state["block"] = creature.Block;
 
-        if (combatState != null)
+        if (combatState != null && CombatManager.Instance.IsInProgress)
         {
             state["energy"] = combatState.Energy;
             state["max_energy"] = combatState.MaxEnergy;
