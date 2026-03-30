@@ -18,7 +18,7 @@ Singleplayer and multiplayer (co-op) supported. Tested against STS2 `v0.99.1`.
 
 ### Install
 
-Grab the [latest release](https://github.com/Gennadiyev/STS2_MCP/releases/latest) and follow the instructions:
+Grab the [latest release](https://github.com/Gennadiyev/STS2MCP/releases/latest) and follow the instructions:
 
 1. Copy `STS2_MCP.dll` and `STS2_MCP.json` to `<game_install>/mods/`
 2. Launch the game and enable mods in settings (a consent dialog appears on first launch)
