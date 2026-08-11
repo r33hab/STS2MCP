@@ -3588,16 +3588,22 @@ public static partial class McpMod
         }
         state["cards"] = selectableCards;
 
-        // Already-selected cards (in the SelectedHandCardContainer)
-        var selectedContainer = hand.GetNodeOrNull<Godot.Control>("%SelectedHandCardContainer");
-        if (selectedContainer != null)
+        // Already-selected cards. NPlayerHand has two separate selection code paths --
+        // SelectCardInSimpleMode() (used by "simple_select": discard/exhaust-one prompts)
+        // populates the %SelectedHandCardContainer UI node by physically moving the card
+        // there, while SelectCardInUpgradeMode() (used by "upgrade_select": Armaments etc.)
+        // instead shows an in-place NUpgradePreview and never touches that container -- so
+        // reading only the container silently reports zero selected cards for every
+        // upgrade_select prompt, even after a real selection succeeds. The private
+        // `_selectedCards` field (List<CardModel>) is what both code paths actually update,
+        // so read that directly via reflection instead of the UI-only container.
+        if (GetInstanceFieldValue(hand, "_selectedCards") is List<CardModel> selectedCardModels
+            && selectedCardModels.Count > 0)
         {
             var selectedCards = new List<Dictionary<string, object?>>();
-            var selectedHolders = FindAll<NSelectedHandCardHolder>(selectedContainer);
             int selIdx = 0;
-            foreach (var holder in selectedHolders)
+            foreach (var card in selectedCardModels)
             {
-                var card = holder.CardModel;
                 if (card == null) continue;
                 selectedCards.Add(new Dictionary<string, object?>
                 {
@@ -3608,6 +3614,32 @@ public static partial class McpMod
             }
             if (selectedCards.Count > 0)
                 state["selected_cards"] = selectedCards;
+        }
+        else
+        {
+            // Fallback to the old UI-container approach in case a future mode uses yet
+            // another representation this doesn't anticipate, or _selectedCards gets
+            // renamed in a game patch.
+            var selectedContainer = hand.GetNodeOrNull<Godot.Control>("%SelectedHandCardContainer");
+            if (selectedContainer != null)
+            {
+                var selectedCards = new List<Dictionary<string, object?>>();
+                var selectedHolders = FindAll<NSelectedHandCardHolder>(selectedContainer);
+                int selIdx = 0;
+                foreach (var holder in selectedHolders)
+                {
+                    var card = holder.CardModel;
+                    if (card == null) continue;
+                    selectedCards.Add(new Dictionary<string, object?>
+                    {
+                        ["index"] = selIdx,
+                        ["name"] = SafeGetText(() => card.Title)
+                    });
+                    selIdx++;
+                }
+                if (selectedCards.Count > 0)
+                    state["selected_cards"] = selectedCards;
+            }
         }
 
         // Confirm button state
