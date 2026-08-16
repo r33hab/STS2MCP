@@ -1197,6 +1197,15 @@ public static partial class McpMod
             state["discard_pile"] = BuildPileCardList(combatState.DiscardPile.Cards, PileType.Discard);
             state["exhaust_pile"] = BuildPileCardList(combatState.ExhaustPile.Cards, PileType.Exhaust);
 
+            // FORK ADDITION — true pile order (index 0 = top of pile, drawn next), with
+            // raw entry ids rather than localized titles. `draw_pile` above is sorted by
+            // rarity/id to match the in-game display, so it cannot be used to compare
+            // card *sequences* against the emulator. Used by the draw-pile differential
+            // test; keep both, since existing consumers rely on the sorted view.
+            state["draw_pile_ordered"] = BuildOrderedPileList(combatState.DrawPile.Cards);
+            state["discard_pile_ordered"] = BuildOrderedPileList(combatState.DiscardPile.Cards);
+            state["hand_ordered"] = BuildOrderedPileList(combatState.Hand.Cards);
+
             // Orbs
             var orbQueue = combatState.OrbQueue;
             if (orbQueue != null && orbQueue.Capacity > 0)
@@ -1371,6 +1380,22 @@ public static partial class McpMod
                 ["cost"] = GetCostDisplay(card),
                 ["star_cost"] = GetStarCostDisplay(card),
                 ["description"] = SafeGetCardDescription(card, pile)
+            });
+        }
+        return list;
+    }
+
+    // FORK ADDITION — see the draw_pile_ordered call site. Raw entry ids in true pile
+    // order, deliberately minimal so the readout is stable and cheap to diff.
+    private static List<Dictionary<string, object?>> BuildOrderedPileList(IEnumerable<CardModel> cards)
+    {
+        var list = new List<Dictionary<string, object?>>();
+        foreach (var card in cards)
+        {
+            list.Add(new Dictionary<string, object?>
+            {
+                ["id"] = card.Id.Entry,
+                ["is_upgraded"] = card.IsUpgraded
             });
         }
         return list;
