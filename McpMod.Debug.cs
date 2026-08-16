@@ -4,6 +4,7 @@ using System.Text.Json;
 using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Rooms;
 using MegaCrit.Sts2.Core.Runs;
 
@@ -67,6 +68,25 @@ public static partial class McpMod
             ["message"] = IsPlayPhase(player)
                 ? "Already in play phase"
                 : "Combat in progress; awaiting play phase",
+        };
+    }
+
+    // {"action":"return_to_main_menu"}
+    // Save-and-quit to the main menu, leaving the run in progress (the pause menu's
+    // "Save and Quit" path: NPauseMenu.CloseToMenu -> NGame.Instance.ReturnToMainMenu).
+    // v0.107 removed the equivalent action; the differential harness's
+    // abandon_existing_run() depends on it.
+    private static Dictionary<string, object?> ExecuteReturnToMainMenu()
+    {
+        var game = NGame.Instance;
+        if (game == null)
+            return Error("NGame not available");
+
+        _ = game.ReturnToMainMenu();
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["message"] = "Returning to main menu",
         };
     }
 }
