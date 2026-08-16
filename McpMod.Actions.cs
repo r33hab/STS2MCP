@@ -1287,6 +1287,13 @@ public static partial class McpMod
             return ExecuteLoadLobbyMenuOption(loadLobby, option);
         }
 
+        // Custom-run screen (seeded runs) — mounted separately like character select.
+        var customRun = FindFirst<MegaCrit.Sts2.Core.Nodes.Screens.CustomRun.NCustomRunScreen>(tree.Root);
+        if (customRun != null && IsNodeVisible(customRun))
+        {
+            return ExecuteCustomRunMenuOption(customRun, option, seed);
+        }
+
         // Character select can outlive or be mounted separately from NMainMenu,
         // so handle it before main-menu-specific routing.
         var charSelect = FindFirst<NCharacterSelectScreen>(tree.Root);

@@ -194,6 +194,16 @@ public static partial class McpMod
                     }
                 }
 
+                // Custom-run screen (seeded runs) — mounted separately like char select.
+                if (result.ContainsKey("menu_screen") == false)
+                {
+                    var customRun = FindFirst<MegaCrit.Sts2.Core.Nodes.Screens.CustomRun.NCustomRunScreen>(tree.Root);
+                    if (customRun != null && IsNodeVisible(customRun))
+                    {
+                        AddCustomRunMenuState(result, customRun);
+                    }
+                }
+
                 // Check for character select screen
                 if (result.ContainsKey("menu_screen") == false)
                 {
@@ -618,6 +628,55 @@ public static partial class McpMod
         }
 
         return result;
+    }
+
+    private static void AddCustomRunMenuState(
+        Dictionary<string, object?> result,
+        MegaCrit.Sts2.Core.Nodes.Screens.CustomRun.NCustomRunScreen customRun)
+    {
+        // Report as "character_select" so existing menu flows work; flag custom_run
+        // and surface the current seed + ascension the custom screen exposes.
+        result["state_type"] = "menu";
+        result["menu_screen"] = "character_select";
+        result["message"] = "Select a character (custom run).";
+        result["custom_run"] = true;
+
+        var options = new List<Dictionary<string, object?>>();
+        var characters = new List<Dictionary<string, object?>>();
+        foreach (var btn in FindAll<NCharacterSelectButton>(customRun))
+        {
+            try
+            {
+                if (btn.Character is { } cm && IsNodeVisible(btn))
+                {
+                    options.Add(new Dictionary<string, object?> { ["name"] = cm.Id.Entry, ["enabled"] = !btn.IsLocked });
+                    characters.Add(new Dictionary<string, object?>
+                    {
+                        ["name"] = SafeGetText(() => cm.Title),
+                        ["id"] = cm.Id.Entry,
+                        ["locked"] = btn.IsLocked,
+                        ["hp"] = cm.StartingHp,
+                    });
+                }
+            }
+            catch { }
+        }
+        result["characters"] = characters;
+        result["options"] = options;
+
+        try
+        {
+            if (GetInstanceFieldValue(customRun, "_ascensionPanel")
+                is MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect.NAscensionPanel panel)
+                result["ascension"] = panel.Ascension;
+        }
+        catch { }
+        try
+        {
+            if (GetInstanceFieldValue(customRun, "_seedInput") is Godot.LineEdit seedInput)
+                result["seed_input"] = seedInput.Text;
+        }
+        catch { }
     }
 
     private static void AddCharacterSelectMenuState(
