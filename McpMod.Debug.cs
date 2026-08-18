@@ -89,4 +89,28 @@ public static partial class McpMod
             ["message"] = "Returning to main menu",
         };
     }
+
+    // Counts room entries that have RUN TO COMPLETION.
+    //
+    // `RunManager.EnterRoomInternal` is async — it pushes the room, awaits
+    // `room.Enter` (which preloads that room's assets), and fires `RoomEntered` as its
+    // very last statement. The HTTP state reports a non-menu state as soon as the run
+    // exists, which is *during* that await, and anything that tears the run down in
+    // that window (our save-and-quit between captures) makes the in-flight task NRE:
+    // the "internal error!" popup, ~1 embark in 5.
+    //
+    // Polling proxies for "the room looks ready" narrowed the window but could not
+    // close it — the event model answers before its assets finish loading. This is the
+    // game's own completion signal, so a harness that waits for it cannot lose the
+    // race. Monotonic on purpose: callers read it before embarking and wait for it to
+    // move, which needs no reset semantics.
+    private static int _roomsEntered;
+
+    internal static int RoomsEntered => _roomsEntered;
+
+    internal static void TrackRoomEntries()
+    {
+        RunManager.Instance.RoomEntered += () => _roomsEntered++;
+    }
+
 }
