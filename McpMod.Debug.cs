@@ -1,7 +1,15 @@
+using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using System.Linq;
 using System.Text.Json;
 using MegaCrit.Sts2.Core.Combat;
+using MegaCrit.Sts2.Core.Context;
+using MegaCrit.Sts2.Core.Entities.Multiplayer;
+using MegaCrit.Sts2.Core.Commands;
+using MegaCrit.Sts2.Core.Entities.Cards;
+using MegaCrit.Sts2.Core.Entities.Creatures;
+using MegaCrit.Sts2.Core.GameActions.Multiplayer;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Nodes;
@@ -88,6 +96,153 @@ public static partial class McpMod
             ["status"] = "ok",
             ["message"] = "Returning to main menu",
         };
+    }
+
+    // {"action":"debug_add_card","card":"MOLTEN_FIST","upgraded":true,"pile":"hand"}
+    // Puts a chosen card into a chosen combat pile, which is what lets the emulator's
+    // card-capture harness observe one card in isolation instead of waiting for the
+    // deck to deal it. Without this, per-card ground truth is limited to whatever a
+    // run happens to offer.
+    //
+    // The instance comes from ModelDb, never `new MoltenFist()`: a hand-constructed
+    // model never has InitId() called on it, so its Id.Entry is empty and the game
+    // cannot render or resolve it (the trap documented in BuildCardWikiCandidates).
+    //
+    // CombatState.CreateCard does the clone AND the owner wiring. Cloning it here with
+    // ToMutable() instead produces an ownerless card, and AddGeneratedCardToCombat
+    // dereferences `card.Owner.Creature` — which, from a fire-and-forget task, fails
+    // silently: the action answers "ok" and the card never appears.
+    private static Dictionary<string, object?> ExecuteDebugAddCard(
+        Player player,
+        Dictionary<string, JsonElement> data)
+    {
+        if (!CombatManager.Instance.IsInProgress)
+            return Error("Not in combat");
+
+        if (!data.TryGetValue("card", out var cardEl) || cardEl.ValueKind != JsonValueKind.String)
+            return Error("debug_add_card requires a string 'card' field (the card's entry id, e.g. MOLTEN_FIST)");
+
+        var wanted = cardEl.GetString()!;
+        var canonical = ModelDb.AllCards.FirstOrDefault(c =>
+            string.Equals(SafeGetText(() => c.Id.Entry), wanted, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(c.GetType().Name, wanted, StringComparison.OrdinalIgnoreCase));
+        if (canonical == null)
+            return Error($"Unknown card: {wanted}");
+
+        var pileName = data.TryGetValue("pile", out var pileEl) && pileEl.ValueKind == JsonValueKind.String
+            ? pileEl.GetString()!
+            : "hand";
+        if (!Enum.TryParse<PileType>(pileName, ignoreCase: true, out var pile)
+            || pile is PileType.None or PileType.Play)
+        {
+            return Error($"Unknown pile: {pileName} (use hand, draw, discard, exhaust or deck)");
+        }
+
+        var combatState = player.Creature.CombatState;
+        if (combatState == null)
+            return Error("No combat state");
+
+        var card = combatState.CreateCard(canonical, player);
+        if (data.TryGetValue("upgraded", out var upEl) && upEl.ValueKind == JsonValueKind.True)
+            CardCmd.Upgrade(card);
+
+        // Fire-and-forget, like debug_start_encounter: the game resolves the add on its
+        // own loop and the caller polls the state until the card shows up.
+        _ = CardPileCmd.AddGeneratedCardToCombat(card, pile, player, CardPilePosition.Top);
+
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["message"] = $"Adding {SafeGetText(() => card.Id.Entry)} to {pile}",
+        };
+    }
+
+    // {"action":"debug_set_energy","amount":9}
+    // Guarantees the card under capture is affordable. A capture that silently failed
+    // to play the card would otherwise look like a passing no-op diff.
+    private static Dictionary<string, object?> ExecuteDebugSetEnergy(
+        Player player,
+        Dictionary<string, JsonElement> data)
+    {
+        if (!CombatManager.Instance.IsInProgress)
+            return Error("Not in combat");
+
+        if (!data.TryGetValue("amount", out var amountEl)
+            || !amountEl.TryGetDecimal(out var amount)
+            || amount < 0)
+        {
+            return Error("debug_set_energy requires a non-negative numeric 'amount' field");
+        }
+
+        _ = PlayerCmd.SetEnergy(amount, player);
+
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["message"] = $"Setting energy to {amount}",
+        };
+    }
+
+    // {"action":"debug_add_power","power":"VULNERABLE_POWER","amount":2,"target":"CORPSE_SLUG_0"}
+    // Stages a power on an enemy (or on the player, with "target":"player"), so a card
+    // capture can observe the conditional half of an effect -- Molten Fist reapplying
+    // the target's Vulnerable, Spite scaling off HP lost -- instead of only the plain
+    // path a fresh combat happens to offer.
+    private static Dictionary<string, object?> ExecuteDebugAddPower(
+        Player player,
+        Dictionary<string, JsonElement> data)
+    {
+        if (!CombatManager.Instance.IsInProgress)
+            return Error("Not in combat");
+
+        if (!data.TryGetValue("power", out var powerEl) || powerEl.ValueKind != JsonValueKind.String)
+            return Error("debug_add_power requires a string 'power' field (e.g. VULNERABLE_POWER)");
+        if (!data.TryGetValue("amount", out var amountEl) || !amountEl.TryGetDecimal(out var amount))
+            return Error("debug_add_power requires a numeric 'amount' field");
+
+        var wanted = powerEl.GetString()!;
+        var canonical = ModelDb.AllPowers.FirstOrDefault(p =>
+            string.Equals(SafeGetText(() => p.Id.Entry), wanted, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(p.GetType().Name, wanted, StringComparison.OrdinalIgnoreCase));
+        if (canonical == null)
+            return Error($"Unknown power: {wanted}");
+
+        var combatState = player.Creature.CombatState;
+        if (combatState == null)
+            return Error("No combat state");
+
+        var targetId = data.TryGetValue("target", out var targetEl) && targetEl.ValueKind == JsonValueKind.String
+            ? targetEl.GetString()!
+            : "player";
+        var target = string.Equals(targetId, "player", StringComparison.OrdinalIgnoreCase)
+            ? player.Creature
+            : ResolveTarget(combatState, targetId);
+        if (target == null)
+            return Error($"Target '{targetId}' not found among alive enemies");
+
+        // PowerCmd.Apply needs a choice context and asserts the power is mutable, and it
+        // stalls unless the task is driven the way CombatManager drives its own hooks.
+        _ = ApplyPowerAsync(player, canonical.ToMutable(), target, amount);
+
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["message"] = $"Applying {amount} {SafeGetText(() => canonical.Id.Entry)} to {targetId}",
+        };
+    }
+
+    private static async Task ApplyPowerAsync(
+        Player player,
+        PowerModel power,
+        Creature target,
+        decimal amount)
+    {
+        var context = new HookPlayerChoiceContext(
+            player,
+            LocalContext.NetId!.Value,
+            GameActionType.CombatPlayPhaseOnly);
+        var task = PowerCmd.Apply(context, power, target, amount, applier: null, cardSource: null);
+        await context.AssignTaskAndWaitForPauseOrCompletion(task);
     }
 
     // Counts room entries that have RUN TO COMPLETION.

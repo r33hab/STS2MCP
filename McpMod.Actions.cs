@@ -89,6 +89,9 @@ public static partial class McpMod
             "crystal_sphere_proceed" => ExecuteCrystalSphereProceed(),
             "debug_start_encounter" => ExecuteDebugStartEncounter(data),
             "debug_force_play_phase" => ExecuteDebugForcePlayPhase(player),
+            "debug_add_card" => ExecuteDebugAddCard(player, data),
+            "debug_set_energy" => ExecuteDebugSetEnergy(player, data),
+            "debug_add_power" => ExecuteDebugAddPower(player, data),
             "return_to_main_menu" => ExecuteReturnToMainMenu(),
             _ => Error($"Unknown action: {action}")
         };
