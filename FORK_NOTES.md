@@ -46,8 +46,19 @@ cp mod_manifest.json         "$GAMEDIR/SlayTheSpire2.app/Contents/MacOS/mods/STS
 Needs .NET 9 SDK. API at `http://localhost:15526` (`/api/v1/singleplayer`,
 `/api/v1/compendium`). `upstream` remote = Gennadiyev (pull upstream fixes from there).
 
-## Known issue
+## Known issues
 
 Rapid `abandon → re-embark → debug_start_encounter` cycling crashes the game (error
 popup). Use single clean sequences with generous waits; hardening these actions with
 settled-state guards is a tracked follow-on.
+
+`GET /api/v1/singleplayer` can return HTTP 500 while a room transition is still in
+flight — seen reliably when entering Fake Merchant, whose screen is built as a shop. It
+clears once the room settles, so a caller polling across a `debug_start_*` should treat a
+failed read as "not there yet" rather than as an error; a batch that gives up on the read
+never posts its next jump and strands itself in the room it could not read.
+
+The state also reports the event id before it reports that event's option list, so a
+caller that waits for the first state naming the right event gets the *previous* event's
+options under the new event's name. Wait for the option list to both change and hold
+still.
