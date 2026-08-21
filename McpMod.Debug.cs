@@ -61,6 +61,50 @@ public static partial class McpMod
         };
     }
 
+    // {"action":"debug_start_event","event":"SelfHelpBook"}
+    // Enters the named event's room against the current run state, replacing whatever
+    // room the run is in. The sibling of debug_start_encounter, and the reason it
+    // exists: without it there is no way to reach a chosen event on demand, so the
+    // emulator's per-event tests have no way to take ground truth from the game.
+    //
+    // EventModel seeds its own Rng from the run seed, the current TotalFloor and a hash
+    // of the event's id, so what the event rolls depends on where in the run it is
+    // started -- capture the floor alongside the readout.
+    private static Dictionary<string, object?> ExecuteDebugStartEvent(
+        Dictionary<string, JsonElement> data)
+    {
+        if (!data.TryGetValue("event", out var evEl)
+            || evEl.ValueKind != JsonValueKind.String)
+        {
+            return Error("debug_start_event requires a string 'event' field");
+        }
+
+        var name = evEl.GetString()!;
+        // AllEvents already folds in AllSharedEvents.
+        var eventModel = ModelDb.AllEvents
+            .FirstOrDefault(e => e.GetType().Name == name);
+        if (eventModel == null)
+            return Error($"Unknown event: {name}");
+
+        var runState = RunManager.Instance.DebugOnlyGetState();
+        if (runState == null)
+            return Error("No run state available");
+
+        // EventRoom asserts its model is canonical, so unlike CombatRoom this takes
+        // the registry instance rather than a mutable copy.
+        var room = new EventRoom(eventModel);
+
+        // Fire-and-forget: the game processes the room transition on its own loop;
+        // the caller polls /api/v1/singleplayer until the event appears.
+        _ = RunManager.Instance.EnterRoom(room);
+
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["message"] = $"Starting event {name}",
+        };
+    }
+
     // {"action":"debug_force_play_phase"}
     // After debug_start_encounter the combat may still be in its start sequence
     // (banner / setup) rather than the player play phase. Report readiness; the

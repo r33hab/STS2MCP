@@ -13,6 +13,15 @@ drive the game — these existed only in the emulator author's unpublished local
 
 - **`debug_start_encounter {encounter:"CorpseSlugsWeak"}`** — build a `CombatRoom` for
   the named encounter and enter it, jumping straight into that combat. (`McpMod.Debug.cs`)
+- **`debug_start_event {event:"SelfHelpBook"}`** — enter the named event's room,
+  jumping straight to that event. The sibling of `debug_start_encounter`, and the
+  reason it exists: without it there is no way to reach a chosen event on demand, so
+  the emulator's per-event tests had no way to take ground truth from the game.
+  `EventModel` seeds its own Rng from the run seed, the current floor and a hash of the
+  event's id, so capture the floor alongside the readout. Note the game updates the
+  reported event id before its option list, so a caller must wait for the readout to
+  settle rather than reading the first state that names the right event.
+  (`McpMod.Debug.cs`)
 - **`debug_force_play_phase`** — report play-phase readiness. (`McpMod.Debug.cs`)
 - **`return_to_main_menu`** — save-and-quit to the main menu via
   `NGame.Instance.ReturnToMainMenu()` (the pause menu's Save-and-Quit path). The

@@ -88,6 +88,7 @@ public static partial class McpMod
             "crystal_sphere_click_cell" => ExecuteCrystalSphereClickCell(data),
             "crystal_sphere_proceed" => ExecuteCrystalSphereProceed(),
             "debug_start_encounter" => ExecuteDebugStartEncounter(data),
+            "debug_start_event" => ExecuteDebugStartEvent(data),
             "debug_force_play_phase" => ExecuteDebugForcePlayPhase(player),
             "debug_add_card" => ExecuteDebugAddCard(player, data),
             "debug_set_energy" => ExecuteDebugSetEnergy(player, data),
