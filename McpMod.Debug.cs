@@ -105,6 +105,30 @@ public static partial class McpMod
         };
     }
 
+    // {"action":"debug_start_shop"}
+    // Enters a merchant room against the current run state. The third of the
+    // debug_start_* family, and it exists for the same reason as the other two: a shop's
+    // stock is rolled from the run's own streams, so checking the emulator generates the
+    // same stock means being able to reach a shop without playing to one.
+    //
+    // MerchantRoom builds its inventories in EnterInternal, one per player, so there is
+    // nothing to pass in -- unlike an encounter or an event, the room is the whole
+    // request.
+    private static Dictionary<string, object?> ExecuteDebugStartShop()
+    {
+        var runState = RunManager.Instance.DebugOnlyGetState();
+        if (runState == null)
+            return Error("No run state available");
+
+        _ = RunManager.Instance.EnterRoom(new MerchantRoom());
+
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["message"] = "Starting merchant room",
+        };
+    }
+
     // {"action":"debug_force_play_phase"}
     // After debug_start_encounter the combat may still be in its start sequence
     // (banner / setup) rather than the player play phase. Report readiness; the
