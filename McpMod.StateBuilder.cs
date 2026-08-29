@@ -908,12 +908,21 @@ public static partial class McpMod
     {
         try
         {
-            var ids = GetInstancePropertyValue(lobby, "PlayerIds")
-                ?? GetInstancePropertyValue(lobby, "ConnectedPlayerIds");
+            // Property first, then field, for each name. Which of the two a version uses
+            // is not knowable from the other install -- v0.107.1 has ConnectedPlayerIds
+            // as a property, and nothing here can see what shape v0.111 gave PlayerIds.
+            var ids = GetInstanceMemberValue(lobby, "PlayerIds")
+                ?? GetInstanceMemberValue(lobby, "ConnectedPlayerIds");
             return ids switch
             {
                 HashSet<ulong> set => set,
                 IEnumerable<ulong> seq => seq.ToHashSet(),
+                // A differently-typed id collection still yields ulongs one box at a time.
+                System.Collections.IEnumerable seq => seq
+                    .Cast<object?>()
+                    .Where(o => o is not null)
+                    .Select(o => Convert.ToUInt64(o))
+                    .ToHashSet(),
                 _ => null,
             };
         }
@@ -925,8 +934,10 @@ public static partial class McpMod
     {
         try
         {
-            if (GetInstancePropertyValue(lobby, "PlayerCount") is int count)
-                return count;
+            // Any integral width, not just int: the fallback below is correct anyway, but
+            // silently taking it because the property was a uint would be a shame.
+            if (GetInstanceMemberValue(lobby, "PlayerCount") is object raw and (int or uint or long or ulong or short or ushort or byte))
+                return Convert.ToInt32(raw);
         }
         catch { }
         return SafeConnectedPlayerIds(lobby)?.Count ?? 0;
