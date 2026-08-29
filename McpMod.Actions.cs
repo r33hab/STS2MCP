@@ -94,6 +94,10 @@ public static partial class McpMod
             "debug_add_card" => ExecuteDebugAddCard(player, data),
             "debug_set_energy" => ExecuteDebugSetEnergy(player, data),
             "debug_add_power" => ExecuteDebugAddPower(player, data),
+            "debug_enchant_card" => ExecuteDebugEnchantCard(player, data),
+            "debug_enter_next_act" => ExecuteDebugEnterNextAct(),
+            "debug_gain_max_hp" => ExecuteDebugGainMaxHp(player, data),
+            "debug_upgrade_deck" => ExecuteDebugUpgradeDeck(player),
             "return_to_main_menu" => ExecuteReturnToMainMenu(),
             _ => Error($"Unknown action: {action}")
         };

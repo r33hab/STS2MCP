@@ -12,6 +12,7 @@ using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.GameActions.Multiplayer;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Helpers;
 using MegaCrit.Sts2.Core.Nodes;
 using MegaCrit.Sts2.Core.Rooms;
 using MegaCrit.Sts2.Core.Runs;
@@ -38,8 +39,15 @@ public static partial class McpMod
         }
 
         var name = encEl.GetString()!;
+        // AllEncounters is the union of each ACT's pools, so it cannot see an encounter
+        // that only an event starts -- the Fake Merchant, the Architect, the Battleworn
+        // Dummies and the rest. Those are registered models like any other, so fall back
+        // to the registry by ModelId: the category slug for EncounterModel plus the
+        // class name slugified the way ModelDb.GetEntry does it.
         var encounter = ModelDb.AllEncounters
-            .FirstOrDefault(e => e.GetType().Name == name);
+            .FirstOrDefault(e => e.GetType().Name == name)
+            ?? ModelDb.GetByIdOrNull<EncounterModel>(
+                new ModelId(ModelId.SlugifyCategory<EncounterModel>(), StringHelper.Slugify(name)));
         if (encounter == null)
             return Error($"Unknown encounter: {name}");
 
@@ -248,6 +256,150 @@ public static partial class McpMod
         {
             ["status"] = "ok",
             ["message"] = $"Setting energy to {amount}",
+        };
+    }
+
+    // {"action":"debug_enchant_card","enchantment":"Sharp","index":0,"pile":"hand","amount":5}
+    // Enchant a card that is already in a combat pile, so a capture can stage the one
+    // thing decompiled/ cannot answer: whether an enchantment reaches a card whose damage
+    // is a CALCULATION rather than a printed number, and whether a multi-hit attack pays
+    // it once or per hit. `debug_add_card` puts the card there; this decorates it.
+    //
+    // CardCmd.Enchant THROWS on a card the enchantment refuses and on a card that already
+    // carries a different one, so both are checked here and returned as errors -- a debug
+    // action that takes down the game is worse than one that says no.
+    private static Dictionary<string, object?> ExecuteDebugEnchantCard(
+        Player player,
+        Dictionary<string, JsonElement> data)
+    {
+        if (!CombatManager.Instance.IsInProgress)
+            return Error("Not in combat");
+
+        if (!data.TryGetValue("enchantment", out var enchEl) || enchEl.ValueKind != JsonValueKind.String)
+            return Error("debug_enchant_card requires a string 'enchantment' field (e.g. Sharp)");
+
+        var wanted = enchEl.GetString()!;
+        var canonical = ModelDb.DebugEnchantments.FirstOrDefault(e =>
+            string.Equals(SafeGetText(() => e.Id.Entry), wanted, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(e.GetType().Name, wanted, StringComparison.OrdinalIgnoreCase));
+        if (canonical == null)
+            return Error($"Unknown enchantment: {wanted}");
+
+        var pileName = data.TryGetValue("pile", out var pileEl) && pileEl.ValueKind == JsonValueKind.String
+            ? pileEl.GetString()!
+            : "hand";
+        if (!Enum.TryParse<PileType>(pileName, ignoreCase: true, out var pileType)
+            || pileType is PileType.None or PileType.Play)
+        {
+            return Error($"Unknown pile: {pileName} (use hand, draw, discard, exhaust or deck)");
+        }
+
+        var pile = pileType.GetPile(player);
+        if (pile == null)
+            return Error($"No {pileName} pile");
+
+        int index = data.TryGetValue("index", out var idxEl) && idxEl.TryGetInt32(out var i) ? i : 0;
+        var cards = pile.Cards.ToList();
+        if (index < 0 || index >= cards.Count)
+            return Error($"index {index} out of range for {pileName} ({cards.Count} cards)");
+
+        var card = cards[index];
+        // The amount is the enchantment's own default unless the caller overrides it --
+        // Inky and Swift read vars on themselves and ignore it, which is worth seeing.
+        decimal amount = data.TryGetValue("amount", out var amtEl) && amtEl.TryGetDecimal(out var a)
+            ? a
+            : 1m;
+
+        var enchantment = canonical.ToMutable() as EnchantmentModel;
+        if (enchantment == null)
+            return Error($"Could not make {wanted} mutable");
+
+        if (!enchantment.CanEnchant(card))
+            return Error($"{SafeGetText(() => card.Id.Entry)} cannot take {wanted}");
+
+        if (card.Enchantment != null && card.Enchantment.GetType() != enchantment.GetType())
+        {
+            return Error(
+                $"{SafeGetText(() => card.Id.Entry)} already carries "
+                + $"{SafeGetText(() => card.Enchantment!.Id.Entry)}");
+        }
+
+        CardCmd.Enchant(enchantment, card, amount);
+
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["message"] =
+                $"Enchanted {SafeGetText(() => card.Id.Entry)} in {pileName}[{index}] "
+                + $"with {amount} {SafeGetText(() => canonical.Id.Entry)}",
+        };
+    }
+
+    // {"action":"debug_enter_next_act"}
+    // Jump straight to the next act. RunManager.EnterNextAct is exactly what proceeding
+    // from the act's boss reward calls, so this is the real transition and not a
+    // shortcut around it -- what it skips is having to WIN the act first, which costs a
+    // heavily buffed run and several minutes per act-2 data point, and can still lose the
+    // boss fight. In the last act EnterNextAct goes to The Architect instead.
+    private static Dictionary<string, object?> ExecuteDebugEnterNextAct()
+    {
+        if (!RunManager.Instance.IsInProgress)
+            return Error("No run in progress");
+
+        int from = RunManager.Instance.DebugOnlyGetState()!.CurrentActIndex;
+        _ = RunManager.Instance.EnterNextAct();
+
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["message"] = $"Entering act after index {from}",
+        };
+    }
+
+    // {"action":"debug_gain_max_hp","amount":50}
+    // Run-scoped, unlike the rest of this file: no combat required. The auto-player dies
+    // on floors 5-17 and has never once finished act 1, so the boss reward, the act
+    // transition and everything past them are uncovered by any capture. This buys the
+    // depth. CreatureCmd.GainMaxHp raises the maximum and heals by the same amount, and
+    // rolls nothing -- which is what makes it safe to mirror in the emulator.
+    private static Dictionary<string, object?> ExecuteDebugGainMaxHp(
+        Player player,
+        Dictionary<string, JsonElement> data)
+    {
+        if (!data.TryGetValue("amount", out var amountEl)
+            || !amountEl.TryGetDecimal(out var amount)
+            || amount < 0)
+        {
+            return Error("debug_gain_max_hp requires a non-negative numeric 'amount' field");
+        }
+
+        _ = CreatureCmd.GainMaxHp(player.Creature, amount);
+
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["message"] = $"Gaining {amount} max HP",
+        };
+    }
+
+    // {"action":"debug_upgrade_deck"}
+    // Upgrades every upgradable card in the run's deck. The sibling of the above and for
+    // the same reason: a deck of upgraded Strikes and Defends is what gets a scripted
+    // player past the act 1 boss. CardCmd.Upgrade rolls nothing.
+    private static Dictionary<string, object?> ExecuteDebugUpgradeDeck(Player player)
+    {
+        var deck = CardPile.Get(PileType.Deck, player);
+        if (deck == null)
+            return Error("No deck");
+
+        var upgradable = deck.Cards.Where(c => c != null && c.IsUpgradable).ToList();
+        foreach (var card in upgradable)
+            CardCmd.Upgrade(card);
+
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["message"] = $"Upgrading {upgradable.Count} cards",
         };
     }
 
