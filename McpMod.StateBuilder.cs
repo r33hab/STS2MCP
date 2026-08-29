@@ -900,6 +900,38 @@ public static partial class McpMod
         catch { return false; }
     }
 
+    // v0.111 renamed LoadRunLobby.ConnectedPlayerIds to PlayerIds; v0.107.1 has only the
+    // old name. Both are read by reflection so ONE source tree compiles and runs against
+    // either install -- the mod builds against sts2.dll from the game directory, so a
+    // hard-coded member name is a build break on whichever version you are not on.
+    private static HashSet<ulong>? SafeConnectedPlayerIds(LoadRunLobby lobby)
+    {
+        try
+        {
+            var ids = GetInstancePropertyValue(lobby, "PlayerIds")
+                ?? GetInstancePropertyValue(lobby, "ConnectedPlayerIds");
+            return ids switch
+            {
+                HashSet<ulong> set => set,
+                IEnumerable<ulong> seq => seq.ToHashSet(),
+                _ => null,
+            };
+        }
+        catch { return null; }
+    }
+
+    // v0.111's PlayerCount, falling back to the size of the id set on v0.107.1.
+    private static int SafeConnectedPlayerCount(LoadRunLobby lobby)
+    {
+        try
+        {
+            if (GetInstancePropertyValue(lobby, "PlayerCount") is int count)
+                return count;
+        }
+        catch { }
+        return SafeConnectedPlayerIds(lobby)?.Count ?? 0;
+    }
+
     // v0.111 made StartRunLobby.MaxPlayers a private field, so read _maxPlayers directly.
     // Players.Count is the fallback: it is the seated count, not the capacity, but a
     // lobby that cannot be read at all is worse than one reporting a low ceiling.
@@ -1047,7 +1079,7 @@ public static partial class McpMod
             catch { }
 
             info["expected_player_count"] = lobby.Run?.Players?.Count ?? 0;
-            info["connected_player_count"] = lobby.PlayerCount;
+            info["connected_player_count"] = SafeConnectedPlayerCount(lobby);
 
             // Derive the readiness summary from connected players and ready flags. v0.111
             // exposes LoadRunLobby.IsAboutToBeginGame() again, but this reconstruction is
@@ -1057,7 +1089,7 @@ public static partial class McpMod
             try
             {
                 var runPlayers = lobby.Run?.Players;
-                var connectedPlayerIds = lobby.PlayerIds?.ToHashSet();
+                var connectedPlayerIds = SafeConnectedPlayerIds(lobby);
                 aboutToBegin = runPlayers != null
                     && connectedPlayerIds != null
                     && runPlayers.Count > 0
@@ -1075,7 +1107,7 @@ public static partial class McpMod
                 {
                     foreach (var sp in lobby.Run.Players)
                     {
-                        bool isConnected = lobby.PlayerIds?.Contains(sp.NetId) ?? false;
+                        bool isConnected = SafeConnectedPlayerIds(lobby)?.Contains(sp.NetId) ?? false;
                         bool isReady = false;
                         try { isReady = lobby.IsPlayerReady(sp.NetId); } catch { }
                         players.Add(new Dictionary<string, object?>
