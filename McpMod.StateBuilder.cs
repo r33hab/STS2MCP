@@ -1207,6 +1207,24 @@ public static partial class McpMod
         }
         battle["enemies"] = enemies;
 
+        // FORK ADDITION — the player's side of the board. Only `enemies` was reported, so
+        // Osty was invisible to anything reading this: a Necrobinder capture could not see
+        // the pet at all, and the character's whole mechanic could not be verified. Built
+        // with the same shape as an enemy so a consumer can treat them alike.
+        var allies = new List<Dictionary<string, object?>>();
+        var allyCounts = new Dictionary<string, int>();
+        foreach (var creature in combatState.Allies)
+        {
+            // The player's own creature is already reported under `player`; what is new
+            // here is the pets, which nothing else exposes.
+            if (creature.IsAlive && !creature.IsPlayer)
+            {
+                allies.Add(BuildEnemyState(creature, allyCounts));
+            }
+        }
+
+        battle["allies"] = allies;
+
         return battle;
     }
 
