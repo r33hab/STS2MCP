@@ -93,6 +93,7 @@ public static partial class McpMod
             "debug_force_play_phase" => ExecuteDebugForcePlayPhase(player),
             "debug_add_card" => ExecuteDebugAddCard(player, data),
             "debug_set_energy" => ExecuteDebugSetEnergy(player, data),
+            "debug_set_stars" => ExecuteDebugSetStars(player, data),
             "debug_add_power" => ExecuteDebugAddPower(player, data),
             "debug_enchant_card" => ExecuteDebugEnchantCard(player, data),
             "debug_enter_next_act" => ExecuteDebugEnterNextAct(),

@@ -234,6 +234,33 @@ public static partial class McpMod
     }
 
     // {"action":"debug_set_energy","amount":9}
+    // The Regent's second resource. Star cost gates a play exactly as energy does
+    // (PlayerCombatState.HasEnoughResourcesFor checks both), so a capture of a card that
+    // costs more stars than Divine Right's opening three cannot be taken without this --
+    // Comet wants five, and the run has three.
+    private static Dictionary<string, object?> ExecuteDebugSetStars(
+        Player player,
+        Dictionary<string, JsonElement> data)
+    {
+        if (!CombatManager.Instance.IsInProgress)
+            return Error("Not in combat");
+
+        if (!data.TryGetValue("amount", out var amountEl)
+            || !amountEl.TryGetDecimal(out var amount)
+            || amount < 0)
+        {
+            return Error("debug_set_stars requires a non-negative numeric 'amount' field");
+        }
+
+        _ = PlayerCmd.SetStars(amount, player);
+
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["message"] = $"Setting stars to {amount}",
+        };
+    }
+
     // Guarantees the card under capture is affordable. A capture that silently failed
     // to play the card would otherwise look like a passing no-op diff.
     private static Dictionary<string, object?> ExecuteDebugSetEnergy(
