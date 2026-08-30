@@ -1292,6 +1292,12 @@ public static partial class McpMod
             state["draw_pile_ordered"] = BuildOrderedPileList(combatState.DrawPile.Cards);
             state["discard_pile_ordered"] = BuildOrderedPileList(combatState.DiscardPile.Cards);
             state["hand_ordered"] = BuildOrderedPileList(combatState.Hand.Cards);
+            // The exhaust pile was missing from this list while `exhaust_pile` and
+            // `exhaust_pile_count` both reported it, so a capture recorded an empty
+            // ordered exhaust however many cards were really in it. Cards that read the
+            // pile's SIZE -- Ashen Strike scales its damage off it -- would have been
+            // captured against a board the fixture could not rebuild.
+            state["exhaust_pile_ordered"] = BuildOrderedPileList(combatState.ExhaustPile.Cards);
 
             // Orbs
             var orbQueue = combatState.OrbQueue;
