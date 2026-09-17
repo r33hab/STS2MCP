@@ -780,7 +780,7 @@ public static partial class McpMod
                 _ => lobby.NetService.Type.ToString().ToLowerInvariant()
             },
             ["game_mode"] = lobby.GameMode.ToString().ToLowerInvariant(),
-            ["max_players"] = lobby.MaxPlayers,
+            ["max_players"] = SafeMaxPlayers(lobby),
             ["ascension"] = lobby.Ascension,
             ["max_ascension"] = lobby.MaxAscension,
             ["all_ready"] = lobby.Players.Count > 0 && lobby.Players.All(p => p.isReady),
@@ -835,6 +835,31 @@ public static partial class McpMod
     {
         try { return lobby.IsAboutToBeginGame(); }
         catch { return false; }
+    }
+
+    // StartRunLobby.MaxPlayers was public through v0.107 but is only the private
+    // field _maxPlayers as of v0.111, so read whichever the running game exposes.
+    private static int? SafeMaxPlayers(StartRunLobby lobby)
+    {
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.Public |
+            System.Reflection.BindingFlags.NonPublic;
+
+        try
+        {
+            var type = lobby.GetType();
+            var property = type.GetProperty("MaxPlayers", flags);
+            if (property?.GetValue(lobby) is int fromProperty)
+                return fromProperty;
+
+            var field = type.GetField("_maxPlayers", flags);
+            if (field?.GetValue(lobby) is int fromField)
+                return fromField;
+        }
+        catch { }
+
+        return null;
     }
 
     private static string? SafeGetPlayerName(PlatformType platform, ulong playerId)
@@ -970,7 +995,7 @@ public static partial class McpMod
             catch { }
 
             info["expected_player_count"] = lobby.Run?.Players?.Count ?? 0;
-            info["connected_player_count"] = lobby.ConnectedPlayerIds?.Count ?? 0;
+            info["connected_player_count"] = lobby.PlayerCount;
 
             // LoadRunLobby no longer exposes IsAboutToBeginGame in the public game API,
             // so derive the same readiness summary from connected players and ready flags.
@@ -979,7 +1004,7 @@ public static partial class McpMod
             try
             {
                 var runPlayers = lobby.Run?.Players;
-                var connectedPlayerIds = lobby.ConnectedPlayerIds;
+                var connectedPlayerIds = lobby.PlayerIds;
                 aboutToBegin = runPlayers != null
                     && connectedPlayerIds != null
                     && runPlayers.Count > 0
@@ -997,7 +1022,7 @@ public static partial class McpMod
                 {
                     foreach (var sp in lobby.Run.Players)
                     {
-                        bool isConnected = lobby.ConnectedPlayerIds?.Contains(sp.NetId) ?? false;
+                        bool isConnected = lobby.PlayerIds?.Contains(sp.NetId) ?? false;
                         bool isReady = false;
                         try { isReady = lobby.IsPlayerReady(sp.NetId); } catch { }
                         players.Add(new Dictionary<string, object?>
