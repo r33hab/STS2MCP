@@ -682,7 +682,54 @@ public static partial class McpMod
             sb.AppendLine("No travelable nodes available.");
             sb.AppendLine();
         }
+
+        FormatMapGraphMarkdown(sb, map);
     }
+
+    /// <summary>
+    /// The act's map as an adjacency list, row by row.
+    /// "Future paths" above flattens each level and loses which node leads where, so
+    /// planning a route meant reading the save file's saved_map by hand. The same
+    /// coordinates that choose_map_node accepts are printed here.
+    /// </summary>
+    private static void FormatMapGraphMarkdown(StringBuilder sb, Dictionary<string, object?> map)
+    {
+        if (!map.TryGetValue("nodes", out var nodesObj)
+            || nodesObj is not List<Dictionary<string, object?>> nodes
+            || nodes.Count == 0)
+            return;
+
+        sb.AppendLine("## Map Graph");
+        sb.AppendLine("`(col,row) Type -> children`, one line per row of the act.");
+
+        var byRow = new SortedDictionary<int, List<Dictionary<string, object?>>>();
+        foreach (var node in nodes)
+        {
+            int row = ToInt(node.GetValueOrDefault("row"));
+            if (!byRow.TryGetValue(row, out var list))
+                byRow[row] = list = new List<Dictionary<string, object?>>();
+            list.Add(node);
+        }
+
+        foreach (var (row, rowNodes) in byRow)
+        {
+            var parts = rowNodes
+                .OrderBy(n => ToInt(n.GetValueOrDefault("col")))
+                .Select(n =>
+                {
+                    var childKeys = GetChildKeys(n).OrderBy(k => k).ToList();
+                    string children = childKeys.Count > 0 ? string.Join("/", childKeys) : "-";
+                    string marked = n.TryGetValue("marked_by", out var mb) && mb is List<string> mbl && mbl.Count > 0
+                        ? "*" : "";
+                    return $"({n["col"]},{row}) {n["type"]}{marked} -> {children}";
+                });
+            sb.AppendLine($"- row {row}: {string.Join(" | ", parts)}");
+        }
+        sb.AppendLine();
+    }
+
+    private static int ToInt(object? value)
+        => value is int i ? i : (value == null ? 0 : Convert.ToInt32(value));
 
     private static void FormatMapBossMarkdown(StringBuilder sb, Dictionary<string, object?> map)
     {
