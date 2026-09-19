@@ -357,7 +357,7 @@ public static partial class McpMod
             sb.AppendLine($"**{player["character"]}** - HP: {player["hp"]}/{player["max_hp"]} | Block: {player["block"]} | Energy: {player["energy"]}/{player["max_energy"]}{stars} | Gold: {player["gold"]}");
             sb.AppendLine();
 
-            FormatListSection(sb, "Status", player, "status", p => $"- **{p["name"]}** ({FormatStatusAmount(p["amount"])}): {p["description"]}");
+            FormatListSection(sb, "Status", player, "status", p => $"- **{p["name"]}** ({FormatStatusAmountWithDisplay(p)}): {p["description"]}");
             FormatListSection(sb, "Relics", player, "relics", r =>
             {
                 string counter = r.TryGetValue("counter", out var c) && c != null ? $" [{c}]" : "";
@@ -422,7 +422,7 @@ public static partial class McpMod
                     })));
                 }
 
-                FormatListSection(sb, "Status", enemy, "status", p => $"  - **{p["name"]}** ({FormatStatusAmount(p["amount"])}): {p["description"]}");
+                FormatListSection(sb, "Status", enemy, "status", p => $"  - **{p["name"]}** ({FormatStatusAmountWithDisplay(p)}): {p["description"]}");
                 sb.AppendLine();
             }
         }
@@ -458,7 +458,7 @@ public static partial class McpMod
             {
                 sb.AppendLine("  **Status**");
                 foreach (var p in statusList)
-                    sb.AppendLine($"  - **{p["name"]}** ({FormatStatusAmount(p["amount"])}): {p["description"]}");
+                    sb.AppendLine($"  - **{p["name"]}** ({FormatStatusAmountWithDisplay(p)}): {p["description"]}");
             }
         }
         sb.AppendLine();
@@ -1028,6 +1028,18 @@ public static partial class McpMod
     {
         if (amount is int i && i == -1) return "indefinite";
         return amount?.ToString() ?? "0";
+    }
+
+    /// <summary>
+    /// "(2)" normally, "(2, shown as 0)" when the on-screen number is a different
+    /// quantity than the stack count (e.g. Tender shows cards played this turn).
+    /// </summary>
+    private static string FormatStatusAmountWithDisplay(Dictionary<string, object?> power)
+    {
+        string amount = FormatStatusAmount(power.GetValueOrDefault("amount"));
+        if (power.TryGetValue("display_amount", out var shown) && shown != null)
+            return $"{amount}, shown as {FormatStatusAmount(shown)}";
+        return amount;
     }
 
     private static void FormatListSection(StringBuilder sb, string title, Dictionary<string, object?> parent, string key,

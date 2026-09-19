@@ -2456,15 +2456,26 @@ public static partial class McpMod
                 }
                 resolvedDesc ??= SafeGetText(() => power.SmartDescription);
 
-                powers.Add(new Dictionary<string, object?>
+                // "amount" is the stack count that is actually in effect.
+                // DisplayAmount is a UI-facing override: TenderPower, for example,
+                // returns "cards played so far this turn", which reads as 0 at the
+                // start of the very turn the debuff is live. Reporting that as the
+                // stack count made "(0)" look like "expired". Keep the UI number
+                // under display_amount for anyone who needs the on-screen value.
+                int amount = power.Amount;
+                int displayAmount = power.DisplayAmount;
+                var entry = new Dictionary<string, object?>
                 {
                     ["id"] = power.Id.Entry,
                     ["name"] = SafeGetText(() => power.Title),
-                    ["amount"] = power.DisplayAmount,
+                    ["amount"] = amount,
                     ["type"] = power.Type.ToString(),
                     ["description"] = resolvedDesc,
                     ["keywords"] = BuildHoverTips(extraTips)
-                });
+                };
+                if (displayAmount != amount)
+                    entry["display_amount"] = displayAmount;
+                powers.Add(entry);
             }
             catch { /* skip this power - game engine state may be inconsistent */ }
         }
