@@ -616,6 +616,22 @@ public static partial class McpMod
         // to be JSON-only, which made it invisible to the markdown workflow.
         FormatMapBossMarkdown(sb, map);
 
+        // What the next monster / elite room will actually serve.
+        if (map.TryGetValue("next_encounters", out var neObj) && neObj is Dictionary<string, object?> nextEncounters && nextEncounters.Count > 0)
+        {
+            sb.AppendLine("**Next encounters:** " + string.Join(" | ", nextEncounters.Select(kv =>
+            {
+                if (kv.Value is not Dictionary<string, object?> enc)
+                    return $"{kv.Key}: ?";
+                string name = enc.TryGetValue("name", out var n) && n != null ? n.ToString()! : enc.GetValueOrDefault("id")?.ToString() ?? "?";
+                string weak = enc.TryGetValue("is_weak", out var w) && w is true ? " (weak)" : "";
+                string monsters = enc.TryGetValue("possible_monsters", out var m) && m is List<string> ml && ml.Count > 0
+                    ? $" [{string.Join(", ", ml)}]" : "";
+                return $"{kv.Key}: {name}{weak}{monsters}";
+            })));
+            sb.AppendLine();
+        }
+
         // Path taken
         if (map.TryGetValue("visited", out var visitedObj) && visitedObj is List<Dictionary<string, object?>> visited && visited.Count > 0)
         {
