@@ -79,7 +79,7 @@ When a run is active, the response includes `current_run.run_id` in `{save_scope
 
 Run history is resolved from the active Steam account's profile save root. `current_run.run_id` identifies one concrete attempt; `seed` identifies generated run content and can repeat across attempts.
 
-`GET /api/v1/wiki?query=<text>&item_type=<all|card|relic>&limit=<n>` returns a bounded fuzzy-search result over the active profile's discovered cards and relics. `query` is required because this endpoint is intentionally selective and does not dump the full catalog. `item_type` defaults to `all`, and `limit` defaults to 10 with an internal maximum. Card results include both `base` and `upgraded` objects when the card can be upgraded.
+`GET /api/v1/wiki?query=<text>&item_type=<all|card|relic>&limit=<n>&scope=<discovered|all>` returns a bounded fuzzy-search result over cards and relics. `scope` defaults to `discovered` (the active profile's discovered entries only); `scope=all` searches the full catalog, which is what you need when an offered card or relic generates something this profile has never held. Every result carries a `discovered` flag. `query` is required because this endpoint is intentionally selective and does not dump the full catalog. `item_type` defaults to `all`, and `limit` defaults to 10 with an internal maximum. Card results include both `base` and `upgraded` objects when the card can be upgraded.
 
 Example searches:
 
