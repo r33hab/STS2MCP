@@ -25,6 +25,16 @@ public static partial class McpMod
             sb.AppendLine();
         }
 
+        // Loud on purpose: every number below is read live, so a state taken mid-animation
+        // reports pre-resolution values.
+        if (state.TryGetValue("is_resolving", out var resolving) && resolving is true)
+        {
+            string why = state.TryGetValue("resolving_reasons", out var rr) && rr is List<string> rl && rl.Count > 0
+                ? $" ({string.Join(", ", rl)})" : "";
+            sb.AppendLine($"> ⚠ **STILL RESOLVING{why}** — values below may be pre-resolution. Re-read until is_resolving is false.");
+            sb.AppendLine();
+        }
+
         if (stateType == "menu")
         {
             FormatMenuMarkdown(sb, state);
