@@ -1763,6 +1763,19 @@ public static partial class McpMod
 
         var map = runState.Map;
         var visitedCoords = runState.VisitedMapCoords;
+        var marks = CollectMapMarks(runState);
+        if (marks.Count > 0)
+        {
+            state["marked_nodes"] = marks
+                .OrderBy(kv => kv.Key.Item1).ThenBy(kv => kv.Key.Item2)
+                .Select(kv => new Dictionary<string, object?>
+                {
+                    ["col"] = kv.Key.Item1,
+                    ["row"] = kv.Key.Item2,
+                    ["marked_by"] = kv.Value
+                })
+                .ToList();
+        }
 
         // Current position
         if (visitedCoords.Count > 0)
@@ -1808,6 +1821,7 @@ public static partial class McpMod
                     ["row"] = pt.coord.row,
                     ["type"] = pt.PointType.ToString()
                 };
+                AddMapNodeMarks(option, pt, marks);
 
                 // 1-level lookahead
                 var children = pt.Children
@@ -1831,11 +1845,11 @@ public static partial class McpMod
 
         // Starting point
         var start = map.StartingMapPoint;
-        nodes.Add(BuildMapNode(start));
+        nodes.Add(BuildMapNode(start, marks));
 
         // Grid nodes
         foreach (var pt in map.GetAllMapPoints())
-            nodes.Add(BuildMapNode(pt));
+            nodes.Add(BuildMapNode(pt, marks));
 
         // Boss identity comes from the live act's EncounterModel — BossEncounter
         // throws if the act hasn't finished setup yet, so guard the access.
@@ -1845,7 +1859,7 @@ public static partial class McpMod
 
         var primaryBossId = bossEncounter?.Id?.Entry;
         var primaryBossName = SafeGetText(() => bossEncounter?.Title);
-        var bossNode = BuildMapNode(map.BossMapPoint);
+        var bossNode = BuildMapNode(map.BossMapPoint, marks);
         AddBossIdentity(bossNode, primaryBossId, primaryBossName);
         nodes.Add(bossNode);
 
@@ -1854,7 +1868,7 @@ public static partial class McpMod
         {
             var secondBossId = secondBossEncounter?.Id?.Entry;
             var secondBossName = SafeGetText(() => secondBossEncounter?.Title);
-            var secondBossNode = BuildMapNode(map.SecondBossMapPoint);
+            var secondBossNode = BuildMapNode(map.SecondBossMapPoint, marks);
             AddBossIdentity(secondBossNode, secondBossId, secondBossName);
             nodes.Add(secondBossNode);
             secondBoss = BuildBossInfo(map.SecondBossMapPoint, secondBossId, secondBossName);
@@ -1891,9 +1905,9 @@ public static partial class McpMod
             target["name"] = bossName;
     }
 
-    private static Dictionary<string, object?> BuildMapNode(MapPoint pt)
+    private static Dictionary<string, object?> BuildMapNode(MapPoint pt, IReadOnlyDictionary<(int, int), List<string>>? marks = null)
     {
-        return new Dictionary<string, object?>
+        var node = new Dictionary<string, object?>
         {
             ["col"] = pt.coord.col,
             ["row"] = pt.coord.row,
@@ -1903,6 +1917,87 @@ public static partial class McpMod
                 .Select(c => new List<int> { c.coord.col, c.coord.row })
                 .ToList()
         };
+
+        AddMapNodeMarks(node, pt, marks);
+        return node;
+    }
+
+    /// <summary>
+    /// Attaches whatever has marked this node. Relics such as Fur Coat mark rooms when
+    /// picked up (marked combats spawn enemies at 1 HP), and events attach quests to
+    /// nodes — neither was visible anywhere in state or in the save, so the whole point
+    /// of the relic (route towards the free fights) could not be acted on.
+    /// </summary>
+    private static void AddMapNodeMarks(
+        Dictionary<string, object?> node,
+        MapPoint pt,
+        IReadOnlyDictionary<(int, int), List<string>>? marks)
+    {
+        if (marks != null && marks.TryGetValue((pt.coord.col, pt.coord.row), out var markedBy))
+            node["marked_by"] = new List<string>(markedBy);
+
+        try
+        {
+            var quests = pt.Quests;
+            if (quests != null && quests.Count > 0)
+            {
+                node["quests"] = quests
+                    .Select(q => SafeGetText(() => q.Id.Entry) ?? "unknown")
+                    .ToList();
+            }
+        }
+        catch { /* quests are best-effort */ }
+
+        if (pt.CanBeModified)
+            node["can_be_modified"] = true;
+    }
+
+    /// <summary>
+    /// Collects map coordinates marked by the local player's relics.
+    /// Relics advertise their marks through a public GetMarkedCoords(); the lookup is
+    /// duck-typed so any relic that grows one is picked up without further changes here.
+    /// </summary>
+    private static Dictionary<(int, int), List<string>> CollectMapMarks(RunState runState)
+    {
+        var marks = new Dictionary<(int, int), List<string>>();
+        try
+        {
+            var player = LocalContext.GetMe(runState);
+            if (player == null)
+                return marks;
+
+            int actIndex = runState.CurrentActIndex;
+            foreach (var relic in player.Relics)
+            {
+                var method = relic.GetType().GetMethod("GetMarkedCoords", System.Type.EmptyTypes);
+                if (method == null)
+                    continue;
+
+                // A relic that marked rooms in an earlier act must not paint this act's map.
+                var actProperty = relic.GetType().GetProperty("FurCoatActIndex")
+                    ?? relic.GetType().GetProperty("MarkedActIndex");
+                if (actProperty?.GetValue(relic) is int markedAct && markedAct != actIndex)
+                    continue;
+
+                if (method.Invoke(relic, null) is not System.Collections.IEnumerable coords)
+                    continue;
+
+                string relicId = SafeGetText(() => relic.Id.Entry) ?? relic.GetType().Name;
+                foreach (var coordObj in coords)
+                {
+                    if (coordObj is not MapCoord coord)
+                        continue;
+                    var key = (coord.col, coord.row);
+                    if (!marks.TryGetValue(key, out var list))
+                        marks[key] = list = new List<string>();
+                    if (!list.Contains(relicId))
+                        list.Add(relicId);
+                }
+            }
+        }
+        catch { /* marks are best-effort; never fail the whole state read */ }
+
+        return marks;
     }
 
     private static Dictionary<string, object?> BuildRewardsState(NRewardsScreen rewardsScreen, RunState runState)
