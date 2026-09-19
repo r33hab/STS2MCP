@@ -378,6 +378,7 @@ public static partial class McpMod
                         ? $" [{string.Join(", ", kwList)}]" : "";
                     string starCost = card.TryGetValue("star_cost", out var sc) && sc != null ? $" + {sc} star" : "";
                     sb.AppendLine($"- [{card["index"]}] **{card["name"]}** ({card["cost"]} energy{starCost}) [{card["type"]}] {playable}{keywords} - {card["description"]} (target: {card["target_type"]})");
+                    FormatCardTargetPreviews(sb, card);
                 }
                 sb.AppendLine();
             }
@@ -429,6 +430,30 @@ public static partial class McpMod
                 sb.AppendLine();
             }
         }
+    }
+
+    /// <summary>
+    /// Resolved damage per living enemy, as the game would apply it right now
+    /// (Strength, Pen Nib, Vulnerable, Weak all folded in). The card's own text bakes
+    /// in an inconsistent subset of those, so this is the line to compute lethal from.
+    /// </summary>
+    private static void FormatCardTargetPreviews(StringBuilder sb, Dictionary<string, object?> card)
+    {
+        if (!card.TryGetValue("vs_targets", out var vtObj)
+            || vtObj is not List<Dictionary<string, object?>> targets
+            || targets.Count == 0)
+            return;
+
+        var parts = targets.Select(t =>
+        {
+            string label = t.GetValueOrDefault("target")?.ToString() ?? "?";
+            if (!t.TryGetValue("damage", out var dmg) || dmg == null)
+                return $"{label}: -";
+            string hits = t.TryGetValue("hits", out var h) && h != null
+                ? $" x{h} = {t.GetValueOrDefault("total_damage")}" : "";
+            return $"{label}: {dmg}{hits}";
+        });
+        sb.AppendLine($"  - resolved damage: {string.Join(", ", parts)}");
     }
 
     private static void FormatDeckPilesMarkdown(StringBuilder sb, Dictionary<string, object?> player)

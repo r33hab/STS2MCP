@@ -1306,7 +1306,127 @@ public static partial class McpMod
         state["target_type"] = card.TargetType.ToString();
         state["can_play"] = unplayableReason == UnplayableReason.None;
         state["unplayable_reason"] = unplayableReason != UnplayableReason.None ? unplayableReason.ToString() : null;
+
+        var vsTargets = BuildCardTargetPreviews(card);
+        if (vsTargets.Count > 0)
+            state["vs_targets"] = vsTargets;
+
         return state;
+    }
+
+    /// <summary>
+    /// What this card actually does to each living enemy right now.
+    ///
+    /// The number printed on a card has an inconsistent set of modifiers baked in:
+    /// Strength and Pen Nib show up, Vulnerable and Weak sometimes do and sometimes
+    /// don't, because the game only folds target-side modifiers in while the card is
+    /// hovered over that target. So a caller reading the card text had to guess which
+    /// multipliers were already applied — 60 expected, 43 dealt.
+    ///
+    /// This runs the same preview the UI runs on hover (CardModel.UpdateDynamicVarPreview,
+    /// whose CalculatedDamageVar goes through Hook.ModifyDamage with the target) once per
+    /// enemy, reports the resolved damage, hit count and target-specific description, then
+    /// clears the preview so the live card is left exactly as it was found.
+    /// </summary>
+    private static List<Dictionary<string, object?>> BuildCardTargetPreviews(CardModel card)
+    {
+        var previews = new List<Dictionary<string, object?>>();
+
+        if (card.TargetType is not (TargetType.AnyEnemy or TargetType.AllEnemies or TargetType.RandomEnemy))
+            return previews;
+
+        ICombatState? combatState;
+        try { combatState = card.Owner?.Creature?.CombatState; }
+        catch { return previews; }
+        if (combatState == null)
+            return previews;
+
+        try
+        {
+            foreach (var enemy in combatState.Enemies)
+            {
+                if (!enemy.IsAlive) continue;
+
+                try
+                {
+                    card.UpdateDynamicVarPreview(CardPreviewMode.Normal, enemy, card.DynamicVars);
+
+                    var preview = new Dictionary<string, object?>
+                    {
+                        ["target"] = GetStableEntityId(enemy),
+                        ["combat_id"] = enemy.CombatId
+                    };
+
+                    // Var names differ per card (Damage, CalculatedDamage, ExtraDamage...),
+                    // and the typed accessors throw when a card has no var of that name,
+                    // so read whatever the card actually carries.
+                    var values = ReadDynamicVarValues(card);
+                    int? damage = PickDynamicVar(values, "CalculatedDamage", "Damage");
+                    if (damage != null)
+                        preview["damage"] = damage;
+
+                    int? hits = PickDynamicVar(values, "Repeat");
+                    if (hits != null && hits > 1)
+                    {
+                        preview["hits"] = hits;
+                        if (damage != null)
+                            preview["total_damage"] = damage * hits;
+                    }
+
+                    int? block = PickDynamicVar(values, "CalculatedBlock", "Block");
+                    if (block != null)
+                        preview["block"] = block;
+
+                    if (values.Count > 0)
+                        preview["values"] = values;
+
+                    preview["description"] = SafeGetTargetedCardDescription(card, enemy);
+                    previews.Add(preview);
+                }
+                catch { /* skip this target; the preview is advisory */ }
+            }
+        }
+        finally
+        {
+            // Always hand the card back the way it was found.
+            try { card.DynamicVars.ClearPreview(); } catch { }
+            try { card.UpdateDynamicVarPreview(CardPreviewMode.Normal, null, card.DynamicVars); } catch { }
+        }
+
+        return previews;
+    }
+
+    /// <summary>Every dynamic var on this card, by name, at its current (preview) value.</summary>
+    private static Dictionary<string, object?> ReadDynamicVarValues(CardModel card)
+    {
+        var values = new Dictionary<string, object?>();
+        try
+        {
+            foreach (var (name, dynamicVar) in card.DynamicVars)
+            {
+                int? value = SafeGetInt(() => dynamicVar.IntValue);
+                if (value != null)
+                    values[name] = value;
+            }
+        }
+        catch { /* best effort */ }
+        return values;
+    }
+
+    private static int? PickDynamicVar(Dictionary<string, object?> values, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (values.TryGetValue(name, out var value) && value is int i)
+                return i;
+        }
+        return null;
+    }
+
+    private static string? SafeGetTargetedCardDescription(CardModel card, Creature target)
+    {
+        try { return StripRichTextTags(card.GetDescriptionForPile(PileType.Hand, target)).Replace("\n", " "); }
+        catch { return null; }
     }
 
     private static void AddPreviewCardsFromContainer(
