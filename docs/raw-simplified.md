@@ -38,8 +38,8 @@ Every JSON response includes:
 | `map` | Map navigation | `choose_map_node` |
 | `event` | Event or Ancient encounter | `choose_event_option`, `advance_dialogue` |
 | `rest_site` | Rest site | `choose_rest_option`, `proceed` |
-| `shop` | Shop (auto-opens inventory) | `shop_purchase`, `proceed` |
-| `fake_merchant` | Fake Merchant event (relic-only shop) | `shop_purchase`, `proceed` |
+| `shop` | Shop (auto-opens inventory) | `shop_purchase`, `sell_potion`, `proceed` |
+| `fake_merchant` | Fake Merchant event (relic-only shop) | `shop_purchase`, `sell_potion`, `proceed` |
 | `treasure` | Treasure room (auto-opens chest) | `claim_treasure_relic`, `proceed` |
 | `card_select` | Deck card selection overlay (transform, upgrade, remove, choose-a-card) | `select_card`, `confirm_selection`, `cancel_selection` |
 | `bundle_select` | Card bundle choice overlay | `select_bundle`, `confirm_bundle_selection`, `cancel_bundle_selection` |
@@ -112,7 +112,8 @@ Example searches:
 | Action | Parameters | When to Use |
 |---|---|---|
 | `play_card` | `card_uid`?: string, `card_index`?: int, `target`?: string | Play a card from hand. Identify the card by `card_uid` (from state, e.g. `"STRIKE#2"`) — it names the card instance and stays valid for the whole combat — or by `card_index`, which shifts whenever a card leaves the hand. `target` is an `entity_id` (`"JAW_WORM_0"`) or a `combat_id` (`3`), required for single-target cards unless exactly one enemy is alive, in which case it is chosen automatically. |
-| `use_potion` | `slot`: int, `target`?: string | Use a potion. `target` required for enemy-targeting potions. Works outside combat for non-combat-only potions. |
+| `use_potion` | `slot`: int (aliases `potion_index`, `index`), `target`?: string | Use a potion. `slot` is the belt slot from state `player.potions[].slot`, not a position in the list. `target` (an `entity_id` or `combat_id`) is required for enemy-targeting potions unless exactly one enemy is alive, in which case it is chosen automatically; a targeted potion is never consumed against nothing. Works outside combat for non-combat-only potions. |
+| `sell_potion` | `slot`: int (aliases `potion_index`, `index`) | Sell a potion to the merchant by using it on them (Foul Potion's 100-gold mode). Only valid in a shop or fake merchant, and only for potions with a merchant interaction; shop state lists those under `sellable_potions`. |
 | `discard_potion` | `slot`: int | Discard a potion to free up the slot. Use when slots are full and you need room for incoming potions. |
 | `end_turn` | _(none)_ | End the player's turn. |
 

@@ -584,6 +584,15 @@ public static partial class McpMod
             sb.AppendLine();
         }
 
+        if (shop.TryGetValue("sellable_potions", out var spObj)
+            && spObj is List<Dictionary<string, object?>> sellable && sellable.Count > 0)
+        {
+            sb.AppendLine("### Potions this merchant will buy");
+            foreach (var p in sellable)
+                sb.AppendLine($"- [slot {p["slot"]}] **{p["potion_name"]}** — `sell_potion slot {p["slot"]}`");
+            sb.AppendLine();
+        }
+
         if (shop.TryGetValue("items", out var itemsObj) && itemsObj is List<Dictionary<string, object?>> items)
         {
             sb.AppendLine("## Shop Inventory");

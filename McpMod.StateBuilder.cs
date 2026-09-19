@@ -1974,6 +1974,29 @@ public static partial class McpMod
 
         state["items"] = items;
 
+        // Potions the merchant will buy (Foul Potion sells for gold instead of
+        // exploding). There was no sign anywhere in state that this was even possible.
+        var localPlayer = LocalContext.GetMe(runState);
+        if (localPlayer != null)
+        {
+            var sellable = new List<Dictionary<string, object?>>();
+            for (int slot = 0; slot < localPlayer.PotionSlots.Count; slot++)
+            {
+                var held = localPlayer.GetPotionAtSlotIndex(slot);
+                if (held == null || !CanSellPotionToMerchant(localPlayer, held))
+                    continue;
+                sellable.Add(new Dictionary<string, object?>
+                {
+                    ["slot"] = slot,
+                    ["potion_id"] = held.Id.Entry,
+                    ["potion_name"] = SafeGetText(() => held.Title),
+                    ["action"] = "sell_potion"
+                });
+            }
+            if (sellable.Count > 0)
+                state["sellable_potions"] = sellable;
+        }
+
         var proceedButton = NMerchantRoom.Instance?.ProceedButton;
         state["can_proceed"] = proceedButton?.IsEnabled ?? false;
 
