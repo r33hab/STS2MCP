@@ -517,9 +517,6 @@ public static partial class McpMod
         if (mapScreen == null || (!mapScreen.IsOpen && !IsNodeVisible(mapScreen)))
             return Error("Map screen is not open");
 
-        if (!TryGetIntParam(data, out int index, "index", "node_index"))
-            return MissingIntParam("map node index from next_options", "index", "node_index");
-
         var travelable = FindAll<NMapPoint>(mapScreen)
             .Where(mp => mp.State == MapPointState.Travelable && mp.Point != null)
             .OrderBy(mp => mp.Point!.coord.col)
@@ -527,10 +524,36 @@ public static partial class McpMod
 
         if (travelable.Count == 0)
             return Error("No travelable map nodes available");
-        if (index < 0 || index >= travelable.Count)
-            return Error($"Map node index {index} out of range ({travelable.Count} options available)");
 
-        var target = travelable[index];
+        // Coordinates are the safe way to name a node: "index" is a position in the
+        // current option list, so it shifts whenever the set of travelable nodes does,
+        // and a stale index silently routes the run down the wrong branch.
+        bool hasCol = TryGetIntParam(data, out int col, "col");
+        bool hasRow = TryGetIntParam(data, out int row, "row");
+        NMapPoint target;
+
+        if (hasCol && hasRow)
+        {
+            target = travelable.FirstOrDefault(mp =>
+                mp.Point!.coord.col == col && mp.Point!.coord.row == row)!;
+            if (target == null)
+                return Error(
+                    $"No travelable node at ({col},{row}). Travelable: "
+                    + string.Join(", ", travelable.Select(mp => $"{mp.Point!.PointType} ({mp.Point!.coord.col},{mp.Point!.coord.row})")));
+        }
+        else if (hasCol || hasRow)
+        {
+            return Error("Provide both 'col' and 'row' to choose a node by coordinate, or 'index' to choose by list position.");
+        }
+        else
+        {
+            if (!TryGetIntParam(data, out int index, "index", "node_index"))
+                return Error("Missing node selector. Provide 'col' and 'row' (preferred, stable), or 'index' (position in next_options).");
+            if (index < 0 || index >= travelable.Count)
+                return Error($"Map node index {index} out of range ({travelable.Count} options available)");
+            target = travelable[index];
+        }
+
         var pt = target.Point!;
         mapScreen.OnMapPointSelectedLocally(target);
 
