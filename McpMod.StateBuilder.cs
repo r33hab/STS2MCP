@@ -617,7 +617,59 @@ public static partial class McpMod
             result["player"] = BuildPlayerState(_player);
         }
 
+        AddResolvingState(result);
+
         return result;
+    }
+
+    /// <summary>
+    /// Whether the game is still resolving what was last asked of it.
+    ///
+    /// Everything else in this state is read straight off the live models, so a read
+    /// taken while an action is still animating reports pre-resolution numbers: enemy
+    /// HP before a multi-hit finished landing, a hand that has not been redrawn yet.
+    /// That is the difference between "cannot kill this turn" and a lethal, and there
+    /// was no way to tell a settled state from a mid-animation one.
+    ///
+    /// is_resolving is false only when the action queue is empty and nothing is
+    /// blocking player input. resolving_reasons names what is outstanding.
+    /// </summary>
+    private static void AddResolvingState(Dictionary<string, object?> result)
+    {
+        var reasons = new List<string>();
+
+        try
+        {
+            var synchronizer = RunManager.Instance.ActionQueueSynchronizer;
+            var queueSet = GetInstanceFieldValue(synchronizer, "_actionQueueSet");
+            if (queueSet != null && GetPropertyValue(queueSet, "IsEmpty") is bool isEmpty && !isEmpty)
+                reasons.Add("action_queue_not_empty");
+        }
+        catch { /* queue is best-effort */ }
+
+        try
+        {
+            var combat = CombatManager.Instance;
+            if (combat.IsInProgress)
+            {
+                if (combat.PlayerActionsDisabled) reasons.Add("player_actions_disabled");
+                if (combat.IsStarting) reasons.Add("combat_starting");
+                if (combat.IsOverOrEnding) reasons.Add("combat_ending");
+            }
+        }
+        catch { }
+
+        try
+        {
+            var hand = NPlayerHand.Instance;
+            if (hand != null && hand.InCardPlay)
+                reasons.Add("card_still_being_played");
+        }
+        catch { }
+
+        result["is_resolving"] = reasons.Count > 0;
+        if (reasons.Count > 0)
+            result["resolving_reasons"] = reasons;
     }
 
     private static void AddCharacterSelectMenuState(
