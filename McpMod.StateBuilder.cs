@@ -617,7 +617,7 @@ public static partial class McpMod
             result["player"] = BuildPlayerState(_player);
         }
 
-        AddResolvingState(result);
+        AddResolvingState(result, result.GetValueOrDefault("state_type")?.ToString());
 
         return result;
     }
@@ -634,7 +634,19 @@ public static partial class McpMod
     /// is_resolving is false only when the action queue is empty and nothing is
     /// blocking player input. resolving_reasons names what is outstanding.
     /// </summary>
-    private static void AddResolvingState(Dictionary<string, object?> result)
+    /// <summary>
+    /// Screens that exist to take a decision from the player. The game is parked on
+    /// them, not working - reporting "still resolving" here deadlocks any caller that
+    /// waits for it to clear, because only the caller can clear it.
+    /// </summary>
+    private static readonly HashSet<string> _playerInputStates = new()
+    {
+        "card_select", "hand_select", "bundle_select", "relic_select", "card_reward",
+        "rewards", "event", "rest_site", "shop", "fake_merchant", "treasure",
+        "crystal_sphere", "map", "menu", "game_over"
+    };
+
+    private static void AddResolvingState(Dictionary<string, object?> result, string? stateType)
     {
         var reasons = new List<string>();
 
@@ -642,7 +654,8 @@ public static partial class McpMod
         {
             var synchronizer = RunManager.Instance.ActionQueueSynchronizer;
             var queueSet = GetInstanceFieldValue(synchronizer, "_actionQueueSet");
-            if (queueSet != null && GetPropertyValue(queueSet, "IsEmpty") is bool isEmpty && !isEmpty)
+            if (queueSet != null && GetPropertyValue(queueSet, "IsEmpty") is bool isEmpty && !isEmpty
+                && !IsActionQueueWaitingForPlayer(queueSet))
                 reasons.Add("action_queue_not_empty");
         }
         catch { /* queue is best-effort */ }
@@ -667,9 +680,34 @@ public static partial class McpMod
         }
         catch { }
 
+        // A screen that is waiting for the player is not "resolving", whatever the
+        // queue says: the action sitting in the queue is the one paused on this very
+        // screen, and it cannot progress until the caller answers it.
+        if (stateType != null && _playerInputStates.Contains(stateType))
+            reasons.Clear();
+
         result["is_resolving"] = reasons.Count > 0;
         if (reasons.Count > 0)
             result["resolving_reasons"] = reasons;
+    }
+
+    /// <summary>
+    /// True when the action queue is non-empty only because an action is parked
+    /// waiting for a player choice (a card selection, a bundle pick, ...).
+    /// </summary>
+    private static bool IsActionQueueWaitingForPlayer(object queueSet)
+    {
+        try
+        {
+            if (GetInstanceFieldValue(queueSet, "_actionsWaitingForResumption") is System.Collections.IEnumerable waiting)
+            {
+                foreach (var _ in waiting)
+                    return true;
+            }
+        }
+        catch { /* best effort */ }
+
+        return false;
     }
 
     private static void AddCharacterSelectMenuState(
