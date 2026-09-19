@@ -38,6 +38,7 @@ using MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect;
 using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
 using MegaCrit.Sts2.Core.Nodes.Screens.GameOverScreen;
 using MegaCrit.Sts2.Core.Nodes.Screens.Timeline;
+using MegaCrit.Sts2.Core.Nodes.Screens.Timeline.UnlockScreens;
 using MegaCrit.Sts2.Core.Nodes.Screens.ProfileScreen;
 using Godot;
 
@@ -1211,6 +1212,146 @@ public static partial class McpMod
         return null;
     }
 
+    /// <summary>
+    /// Reveals every obtained-but-unrevealed epoch, opening the Timeline if needed.
+    ///
+    /// A finished run leaves its epochs "Obtained". Until they are revealed the main
+    /// menu hides `singleplayer` entirely, so the API could not start the next run —
+    /// the single thing that made unattended play impossible, because every run ended
+    /// in a screenshot and a hand-placed click.
+    ///
+    /// One step per call so the caller can poll; the response carries `done` and
+    /// `pending_epoch_ids`. Reveals go through NEpochSlot.RevealEpoch, the same method
+    /// the slot's own click handler calls, so the epoch's unlocks are granted and the
+    /// progress file is written exactly as a manual reveal would.
+    /// </summary>
+    internal static Dictionary<string, object?> ExecuteTimelineRevealEpochs()
+    {
+        var tree = (Engine.GetMainLoop()) as SceneTree;
+        if (tree?.Root == null)
+            return Error("Cannot access scene tree");
+
+        var pending = GetProgressEpochIdsByState("Obtained", "ObtainedNoSlot");
+
+        var timelineScreen = FindFirst<NTimelineScreen>(tree.Root);
+        bool timelineVisible = timelineScreen != null && IsNodeVisible(timelineScreen);
+
+        if (!timelineVisible)
+        {
+            if (pending.Count == 0)
+                return new Dictionary<string, object?>
+                {
+                    ["status"] = "ok",
+                    ["message"] = "No epochs pending reveal",
+                    ["pending_epoch_ids"] = pending,
+                    ["done"] = true
+                };
+
+            var mainMenu = FindFirst<NMainMenu>(tree.Root);
+            if (mainMenu == null)
+                return Error("Not on the main menu; open the main menu before revealing epochs");
+
+            var opened = ClickMenuButtonField(mainMenu, "_timelineButton", "Opening timeline to reveal epochs");
+            if ((string?)opened["status"] == "error")
+                return opened;
+
+            opened["pending_epoch_ids"] = pending;
+            opened["done"] = false;
+            opened["retry"] = true;
+            return opened;
+        }
+
+        // Dismiss the tutorial, any open unlock/inspect screen, and drain the queue
+        // before looking for the next slot. ExecuteMenuSelect("advance") already
+        // encodes that order, and finishes by revealing one slot.
+        var step = ExecuteMenuSelect("advance");
+        bool done = step.TryGetValue("done", out var d) && d is true;
+
+        pending = GetProgressEpochIdsByState("Obtained", "ObtainedNoSlot");
+        step["pending_epoch_ids"] = pending;
+
+        if (done && pending.Count == 0)
+        {
+            // Leave the timeline so the caller lands back on a main menu that has
+            // `singleplayer` again.
+            var back = ExecuteMenuSelect("back");
+            step["message"] = "All epochs revealed; returned to the main menu";
+            step["left_timeline"] = (string?)back["status"] == "ok";
+            step["done"] = true;
+            return step;
+        }
+
+        step["done"] = false;
+        step["retry"] = true;
+        return step;
+    }
+
+    /// <summary>
+    /// Reveals the first epoch slot that is obtained but not yet revealed.
+    /// Returns null when there is nothing left to reveal.
+    /// </summary>
+    private static Dictionary<string, object?>? TryRevealOneEpochSlot(NTimelineScreen timelineScreen)
+    {
+        var pending = GetProgressEpochIdsByState("Obtained", "ObtainedNoSlot");
+        if (pending.Count == 0)
+            return null;
+
+        // Look for the slot first. IsTimelineScreenBusy is a coarse heuristic (it reads
+        // _isUiVisible and the input blocker) and reports "busy" on a timeline that is
+        // sitting still and perfectly interactive, so it must not gate the reveal —
+        // only explain why no slot is available yet.
+        var slot = FindAll<NEpochSlot>(timelineScreen)
+            .FirstOrDefault(s => s.State == EpochSlotState.Obtained);
+
+        if (slot == null)
+            return new Dictionary<string, object?>
+            {
+                ["status"] = "ok",
+                ["message"] = IsTimelineScreenBusy(timelineScreen)
+                    ? "Timeline is still animating; retry after the next state poll"
+                    : "Epochs are obtained but no revealable slot is mounted on the timeline yet; retry after the next state poll",
+                ["pending_epoch_ids"] = pending,
+                ["retry"] = true
+            };
+
+        string epochId = SafeGetText(() => slot.model?.Id) ?? "unknown";
+
+        // Mirror NEpochSlot.OnRelease for the Obtained branch: block input, drop focus,
+        // then reveal. RevealEpoch writes the progress state, opens the inspect screen
+        // and runs the unlock animation, which is what actually grants the epoch's cards
+        // and relics. It is private only because nothing but the click handler calls it.
+        try
+        {
+            timelineScreen.DisableInput();
+            slot.GetViewport()?.GuiReleaseFocus();
+
+            var reveal = typeof(NEpochSlot).GetMethod(
+                "RevealEpoch",
+                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+            if (reveal == null)
+            {
+                timelineScreen.EnableInput();
+                return Error("NEpochSlot.RevealEpoch is missing - the game's timeline API changed");
+            }
+
+            reveal.Invoke(slot, null);
+        }
+        catch (System.Exception ex)
+        {
+            try { timelineScreen.EnableInput(); } catch { }
+            return Error($"Failed to reveal epoch '{epochId}': {ex.InnerException?.Message ?? ex.Message}");
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["message"] = $"Revealing epoch {epochId}",
+            ["revealed_epoch_id"] = epochId,
+            ["pending_epoch_ids"] = GetProgressEpochIdsByState("Obtained", "ObtainedNoSlot"),
+            ["retry"] = true
+        };
+    }
+
     internal static Dictionary<string, object?> ExecuteMenuSelect(string option, string? seed = null, int? ascension = null)
     {
         option = option.Trim();
@@ -1363,21 +1504,21 @@ public static partial class McpMod
                     return new Dictionary<string, object?> { ["status"] = "ok", ["message"] = "Closed epoch inspect screen" };
                 }
 
+                // An unlock screen that is already open ("<character> is now playable",
+                // "you unlocked these cards") blocks everything behind it until its
+                // confirm button is pressed.
+                var openUnlockResult = TryConfirmOpenUnlockScreen(timelineScreen);
+                if (openUnlockResult != null)
+                    return openUnlockResult;
+
                 // Check for queued unlock screens.
                 var queuedUnlockResult = TryHandleQueuedTimelineUnlock(timelineScreen);
                 if (queuedUnlockResult != null)
                     return queuedUnlockResult;
 
-                var unrevealedEpochs = GetProgressEpochIdsByState("Obtained", "ObtainedNoSlot");
-                if (unrevealedEpochs.Count > 0)
-                    return new Dictionary<string, object?>
-                    {
-                        ["status"] = "ok",
-                        ["message"] = "Epoch unlocks are obtained but not revealed; not forcing timeline reveal from automation",
-                        ["pending_epoch_ids"] = unrevealedEpochs,
-                        ["manual_action_required"] = true,
-                        ["done"] = true
-                    };
+                var revealResult = TryRevealOneEpochSlot(timelineScreen);
+                if (revealResult != null)
+                    return revealResult;
 
                 return new Dictionary<string, object?> { ["status"] = "ok", ["message"] = "No more epochs to advance", ["done"] = true };
             }
@@ -1507,12 +1648,6 @@ public static partial class McpMod
 
             // Main menu buttons
             var normalizedMainMenuOption = option.ToLowerInvariant();
-            if (normalizedMainMenuOption == "timeline")
-            {
-                var unrevealedEpochs = GetProgressEpochIdsByState("Obtained", "ObtainedNoSlot");
-                if (unrevealedEpochs.Count > 0)
-                    return TimelineUnlocksNeedManualReveal(unrevealedEpochs);
-            }
 
             var menuFieldName = normalizedMainMenuOption switch
             {
@@ -1533,17 +1668,6 @@ public static partial class McpMod
         }
 
         return Error("Not on a menu screen");
-    }
-
-    private static Dictionary<string, object?> TimelineUnlocksNeedManualReveal(List<string> unrevealedEpochs)
-    {
-        return new Dictionary<string, object?>
-        {
-            ["status"] = "error",
-            ["error"] = "Timeline has obtained epochs that still need to be revealed manually; not opening Timeline because this game state logs invalid unlock-state errors when entered through automation",
-            ["pending_epoch_ids"] = unrevealedEpochs,
-            ["manual_action_required"] = true
-        };
     }
 
     private static Dictionary<string, object?> ExecutePopupOption(
@@ -1848,6 +1972,43 @@ public static partial class McpMod
             }
         }
         return Error($"Character '{option}' not found. Available: {string.Join(", ", buttons.Where(b => !b.IsLocked).Select(b => b.Character?.Id.Entry))}");
+    }
+
+    /// <summary>
+    /// Presses the confirm button on an unlock screen that is currently open.
+    /// Revealing an epoch queues these ("Regent is now playable"), and nothing else on
+    /// the timeline responds until one is acknowledged. Returns null when none is open.
+    /// </summary>
+    private static Dictionary<string, object?>? TryConfirmOpenUnlockScreen(NTimelineScreen timelineScreen)
+    {
+        NUnlockScreen? screen;
+        try { screen = timelineScreen.CurrentUnlockScreen; }
+        catch { return null; }
+
+        if (screen == null || !IsNodeVisible(screen))
+            return null;
+
+        var confirm = GetInstanceFieldValue(screen, "_unlockConfirmButton") as NClickableControl
+            ?? FindFirst<NUnlockConfirmButton>(screen)
+            ?? (NClickableControl?)FindFirst<NAcknowledgeButton>(screen);
+
+        if (confirm == null || !confirm.IsEnabled || !IsControlVisibleOrActionable(confirm))
+            return new Dictionary<string, object?>
+            {
+                ["status"] = "ok",
+                ["message"] = $"{screen.GetType().Name} is open but its confirm button is not actionable yet; retry after the next state poll",
+                ["open_unlock_type"] = screen.GetType().Name,
+                ["retry"] = true
+            };
+
+        confirm.ForceClick();
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["message"] = $"Confirmed {screen.GetType().Name}",
+            ["open_unlock_type"] = screen.GetType().Name,
+            ["retry"] = true
+        };
     }
 
     private static Dictionary<string, object?>? TryHandleQueuedTimelineUnlock(NTimelineScreen timelineScreen)

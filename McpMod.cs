@@ -462,6 +462,21 @@ public static partial class McpMod
 
         string action = actionElem.GetString() ?? "";
 
+        // Revealing timeline epochs is a main-menu operation, so it must not require a run.
+        if (action == "timeline_reveal_epochs")
+        {
+            try
+            {
+                var resultTask = RunOnMainThread(() => ExecuteTimelineRevealEpochs());
+                SendJson(response, resultTask.GetAwaiter().GetResult());
+            }
+            catch (Exception ex)
+            {
+                SendError(response, 500, $"Timeline reveal failed: {ex.Message}");
+            }
+            return;
+        }
+
         // Handle menu actions separately (no run required)
         if (action == "menu_select")
         {
