@@ -275,10 +275,14 @@ public static partial class McpMod
         // Enemies
         var enemies = new List<Dictionary<string, object?>>();
         RefreshEntityIdRegistry(combatState);
+        var seenCombatIds = new HashSet<uint>();
         foreach (var creature in combatState.Enemies)
         {
-            if (creature.IsAlive)
-                enemies.Add(BuildEnemyState(creature));
+            if (!creature.IsAlive)
+                continue;
+            if (creature.CombatId is uint id && !seenCombatIds.Add(id))
+                continue;
+            enemies.Add(BuildEnemyState(creature));
         }
         battle["enemies"] = enemies;
 
