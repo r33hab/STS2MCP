@@ -1875,6 +1875,10 @@ public static partial class McpMod
         }
 
         state["nodes"] = nodes;
+
+        var nextEncounters = BuildNextEncounters(runState);
+        if (nextEncounters.Count > 0)
+            state["next_encounters"] = nextEncounters;
         var primaryBoss = BuildBossInfo(map.BossMapPoint, primaryBossId, primaryBossName);
         state["boss"] = primaryBoss;
         state["bosses"] = secondBoss != null
@@ -1882,6 +1886,78 @@ public static partial class McpMod
             : new List<Dictionary<string, object?>> { primaryBoss };
 
         return state;
+    }
+
+    /// <summary>
+    /// The encounter each room type will serve next. Acts draw combats from a fixed
+    /// ordered list, so the next monster / elite fight is known before entering the
+    /// room — the game logs it at combat start, but state only ever reported enemies
+    /// once the fight had already begun, which is too late to route around a bad matchup.
+    ///
+    /// Read-only: RoomSet's Next* getters peek at the list, they do not advance it.
+    /// </summary>
+    private static Dictionary<string, object?> BuildNextEncounters(RunState runState)
+    {
+        var result = new Dictionary<string, object?>();
+        try
+        {
+            var rooms = GetInstanceFieldValue(runState.Act, "_rooms");
+            if (rooms == null)
+                return result;
+
+            AddNextEncounter(result, "monster", GetPropertyValue(rooms, "NextNormalEncounter"));
+            AddNextEncounter(result, "elite", GetPropertyValue(rooms, "NextEliteEncounter"));
+
+            var nextEvent = GetPropertyValue(rooms, "NextEvent");
+            if (nextEvent != null)
+            {
+                result["event"] = new Dictionary<string, object?>
+                {
+                    ["id"] = SafeGetText(() => ((AbstractModel)nextEvent).Id.Entry),
+                    ["name"] = SafeGetText(() => GetPropertyValue(nextEvent, "Title"))
+                };
+            }
+        }
+        catch { /* best effort - never fail the whole state read over a peek */ }
+
+        return result;
+    }
+
+    private static void AddNextEncounter(Dictionary<string, object?> target, string key, object? encounterObj)
+    {
+        if (encounterObj is not EncounterModel encounter)
+            return;
+
+        var info = new Dictionary<string, object?>
+        {
+            ["id"] = SafeGetText(() => encounter.Id.Entry),
+            ["name"] = SafeGetText(() => encounter.Title),
+            ["is_weak"] = SafeGetBool(() => encounter.IsWeak)
+        };
+
+        try
+        {
+            var monsters = encounter.AllPossibleMonsters?
+                .Select(m => SafeGetText(() => m.Title) ?? SafeGetText(() => m.Id.Entry) ?? "?")
+                .ToList();
+            if (monsters != null && monsters.Count > 0)
+                info["possible_monsters"] = monsters;
+        }
+        catch { /* monster roster is optional */ }
+
+        target[key] = info;
+    }
+
+    private static object? GetPropertyValue(object target, string propertyName)
+    {
+        try { return target.GetType().GetProperty(propertyName)?.GetValue(target); }
+        catch { return null; }
+    }
+
+    private static bool? SafeGetBool(Func<bool> getter)
+    {
+        try { return getter(); }
+        catch { return null; }
     }
 
     private static Dictionary<string, object?> BuildBossInfo(MapPoint pt, string? bossId, string? bossName)
