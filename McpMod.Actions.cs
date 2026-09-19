@@ -120,6 +120,27 @@ public static partial class McpMod
     private static Dictionary<string, object?> MissingIntParam(string description, params string[] names)
         => Error($"Missing '{names[0]}' ({description}). Accepted names: {string.Join(", ", names)}");
 
+    /// <summary>
+    /// Reads the 'target' parameter as a string, accepting a bare JSON number so that
+    /// a combat_id can be passed as either 3 or "3". GetString() throws on a number,
+    /// which used to surface as a 500 rather than a usable error.
+    /// Returns null when no usable target was supplied.
+    /// </summary>
+    private static string? TryReadTargetId(Dictionary<string, JsonElement> data)
+    {
+        if (!data.TryGetValue("target", out var elem))
+            return null;
+
+        string? raw = elem.ValueKind switch
+        {
+            JsonValueKind.String => elem.GetString(),
+            JsonValueKind.Number => elem.ToString(),
+            _ => null
+        };
+
+        return string.IsNullOrWhiteSpace(raw) ? null : raw.Trim();
+    }
+
     private static Dictionary<string, object?> ExecutePlayCard(Player player, Dictionary<string, JsonElement> data)
     {
         if (!CombatManager.Instance.IsInProgress)
@@ -155,13 +176,22 @@ public static partial class McpMod
         Creature? target = null;
         if (card.TargetType == TargetType.AnyEnemy)
         {
-            if (!data.TryGetValue("target", out var targetElem))
-                return Error("Card requires a target. Provide 'target' with an entity_id.");
-
-            string targetId = targetElem.GetString() ?? "";
-            target = ResolveTarget(combatState, targetId);
-            if (target == null)
-                return Error($"Target '{targetId}' not found among alive enemies");
+            string? targetId = TryReadTargetId(data);
+            if (targetId == null)
+            {
+                var alive = combatState.Enemies.Where(e => e.IsAlive).ToList();
+                if (alive.Count != 1)
+                    return Error(
+                        $"Card '{card.Title}' requires a target. Provide 'target' with an entity_id "
+                        + $"or combat_id ({alive.Count} enemies alive).");
+                target = alive[0];
+            }
+            else
+            {
+                target = ResolveTarget(combatState, targetId);
+                if (target == null)
+                    return Error($"Target '{targetId}' not found among alive enemies");
+            }
         }
 
         // Play the card via the action queue (same path as the game UI)
@@ -256,15 +286,31 @@ public static partial class McpMod
         switch (potion.TargetType)
         {
             case TargetType.AnyEnemy:
-                if (!data.TryGetValue("target", out var targetElem))
-                    return Error("Potion requires a target enemy. Provide 'target' with an entity_id.");
-                string targetId = targetElem.GetString() ?? "";
+            {
                 if (combatState == null)
                     return Error("No combat state for target resolution");
+
+                string? targetId = TryReadTargetId(data);
+                if (targetId == null)
+                {
+                    // With a single living enemy there is nothing to disambiguate, so
+                    // pick it rather than refusing. Otherwise say so loudly: this used
+                    // to fall through to target = null and the potion was consumed
+                    // against nothing while the call reported success.
+                    var alive = combatState.Enemies.Where(e => e.IsAlive).ToList();
+                    if (alive.Count != 1)
+                        return Error(
+                            $"Potion '{SafeGetText(() => potion.Title)}' requires a target enemy. "
+                            + $"Provide 'target' with an entity_id or combat_id ({alive.Count} enemies alive).");
+                    target = alive[0];
+                    break;
+                }
+
                 target = ResolveTarget(combatState, targetId);
                 if (target == null)
                     return Error($"Target '{targetId}' not found among alive enemies");
                 break;
+            }
             case TargetType.Self:
             case TargetType.AnyAlly:
             case TargetType.AnyPlayer:
@@ -274,6 +320,9 @@ public static partial class McpMod
                 target = null;
                 break;
         }
+
+        if (target != null && !potion.IsValidTarget(target))
+            return Error($"Potion '{SafeGetText(() => potion.Title)}' cannot target {SafeGetText(() => target.Monster?.Title) ?? "that creature"}");
 
         potion.EnqueueManualUse(target);
 
