@@ -404,7 +404,9 @@ public static partial class McpMod
             sb.AppendLine("## Enemies");
             foreach (var enemy in enemies)
             {
-                sb.AppendLine($"### {enemy["name"]} (`{enemy["entity_id"]}`)");
+                string combatIdTag = enemy.TryGetValue("combat_id", out var cid) && cid != null
+                    ? $" / combat_id `{cid}`" : "";
+                sb.AppendLine($"### {enemy["name"]} (`{enemy["entity_id"]}`{combatIdTag})");
                 sb.AppendLine($"HP: {enemy["hp"]}/{enemy["max_hp"]} | Block: {enemy["block"]}");
 
                 if (enemy.TryGetValue("intents", out var intentsObj) && intentsObj is List<Dictionary<string, object?>> intents && intents.Count > 0)

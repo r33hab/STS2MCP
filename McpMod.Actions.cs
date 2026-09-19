@@ -1058,19 +1058,14 @@ public static partial class McpMod
         if (uint.TryParse(entityId, out uint combatId))
             return combatState.GetCreature(combatId);
 
-        // Match by entity_id pattern (e.g., "jaw_worm_0")
-        // We rebuild the entity IDs the same way as BuildEnemyState
-        var entityCounts = new Dictionary<string, int>();
+        // Match by entity_id (e.g., "jaw_worm_0"). Ids come from the same registry the
+        // state builder uses, so they keep pointing at the creature they were read for
+        // even if another enemy died in between.
+        RefreshEntityIdRegistry(combatState);
         foreach (var creature in combatState.Enemies)
         {
             if (!creature.IsAlive) continue;
-            string baseId = creature.Monster?.Id.Entry ?? "unknown";
-            if (!entityCounts.TryGetValue(baseId, out int count))
-                count = 0;
-            entityCounts[baseId] = count + 1;
-            string generatedId = $"{baseId}_{count}";
-
-            if (generatedId == entityId)
+            if (GetStableEntityId(creature) == entityId)
                 return creature;
         }
 
