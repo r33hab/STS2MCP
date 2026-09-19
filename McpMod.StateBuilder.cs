@@ -2431,7 +2431,13 @@ public static partial class McpMod
         var powers = new List<Dictionary<string, object?>>();
         foreach (var power in creature.Powers)
         {
-            if (!power.IsVisible) continue;
+            // IsVisible is a UI concern (it hides zero-stack and internal bookkeeping
+            // powers from the HUD). A power with a live stack is always reported, even
+            // when the HUD would hide it, because callers compute damage from this list.
+            bool isVisible;
+            try { isVisible = power.IsVisible; }
+            catch { isVisible = true; }
+            if (!isVisible && !HasLiveStack(power)) continue;
 
             // Per-power try/catch: HoverTips getter calls into game engine code
             // (LocString resolution, DynamicVars, virtual ExtraHoverTips) that can
@@ -2475,11 +2481,49 @@ public static partial class McpMod
                 };
                 if (displayAmount != amount)
                     entry["display_amount"] = displayAmount;
+                if (!isVisible)
+                    entry["hidden_in_ui"] = true;
                 powers.Add(entry);
             }
-            catch { /* skip this power - game engine state may be inconsistent */ }
+            catch
+            {
+                // HoverTips / SmartDescription reach deep into engine code and can throw
+                // mid-transition. Dropping the power silently used to make debuffs
+                // disappear from state while they were plainly still in effect, leaving
+                // "why did my damage drop?" to be reverse-engineered from card text.
+                // Emit what can be read without the engine instead.
+                powers.Add(BuildMinimalPowerState(power));
+            }
         }
         return powers;
+    }
+
+    /// <summary>Fallback entry for a power whose description could not be resolved.</summary>
+    private static Dictionary<string, object?> BuildMinimalPowerState(PowerModel power)
+    {
+        var entry = new Dictionary<string, object?>
+        {
+            ["id"] = SafeGetText(() => power.Id.Entry) ?? "unknown",
+            ["name"] = SafeGetText(() => power.Title),
+            ["amount"] = SafeGetInt(() => power.Amount),
+            ["type"] = SafeGetText(() => power.Type.ToString()),
+            ["description"] = null,
+            ["description_unavailable"] = true,
+            ["keywords"] = new List<string>()
+        };
+        return entry;
+    }
+
+    private static bool HasLiveStack(PowerModel power)
+    {
+        try { return power.Amount != 0; }
+        catch { return false; }
+    }
+
+    private static int? SafeGetInt(Func<int> getter)
+    {
+        try { return getter(); }
+        catch { return null; }
     }
 
     private static List<Dictionary<string, object?>> BuildPetsState(Player player)
