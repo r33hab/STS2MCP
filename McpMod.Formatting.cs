@@ -611,6 +611,11 @@ public static partial class McpMod
 
     private static void FormatMapMarkdown(StringBuilder sb, Dictionary<string, object?> map)
     {
+        // Act boss. Bosses are rolled per act and are known as soon as the map exists,
+        // so this is the single most load-bearing line for planning card picks - it used
+        // to be JSON-only, which made it invisible to the markdown workflow.
+        FormatMapBossMarkdown(sb, map);
+
         // Path taken
         if (map.TryGetValue("visited", out var visitedObj) && visitedObj is List<Dictionary<string, object?>> visited && visited.Count > 0)
         {
@@ -647,6 +652,33 @@ public static partial class McpMod
             sb.AppendLine("No travelable nodes available.");
             sb.AppendLine();
         }
+    }
+
+    private static void FormatMapBossMarkdown(StringBuilder sb, Dictionary<string, object?> map)
+    {
+        var bosses = map.TryGetValue("bosses", out var bs) && bs is List<Dictionary<string, object?>> bl && bl.Count > 0
+            ? bl
+            : (map.TryGetValue("boss", out var b) && b is Dictionary<string, object?> bd
+                ? new List<Dictionary<string, object?>> { bd }
+                : null);
+        if (bosses == null)
+            return;
+
+        var labels = new List<string>();
+        foreach (var boss in bosses)
+        {
+            string name = boss.TryGetValue("name", out var n) && n != null
+                ? n.ToString()!
+                : (boss.TryGetValue("id", out var i) && i != null ? i.ToString()! : "Unknown");
+            labels.Add($"{name} ({boss["col"]},{boss["row"]})");
+        }
+        if (labels.Count == 0)
+            return;
+
+        sb.AppendLine(labels.Count > 1
+            ? $"**Boss candidates:** {string.Join(" / ", labels)}"
+            : $"**Boss:** {labels[0]}");
+        sb.AppendLine();
     }
 
     /// <summary>
