@@ -563,7 +563,18 @@ public static partial class McpMod
         if (reward is GoldReward g)
             rewardDesc = $"gold ({g.Amount})";
         else if (reward is PotionReward p)
+        {
             rewardDesc = $"potion ({SafeGetText(() => p.Potion?.Title)})";
+
+            // The game silently refuses a potion reward when the belt is full: the
+            // button stays enabled, the reward stays in the list, and nothing happens.
+            // Reporting that as "ok" turned a full belt into an infinite claim loop.
+            var localPlayer = LocalContext.GetMe(RunManager.Instance.DebugOnlyGetState()!);
+            if (localPlayer != null && !localPlayer.HasOpenPotionSlots)
+                return Error(
+                    $"Potion slots full ({localPlayer.PotionSlots.Count(slot => slot != null)}/{localPlayer.MaxPotionCount}); "
+                    + $"cannot claim {rewardDesc}. Use discard_potion first, or claim the other rewards and proceed.");
+        }
         else if (reward is CardReward)
             rewardDesc = "card (opens card selection)";
 
