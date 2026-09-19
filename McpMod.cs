@@ -359,7 +359,8 @@ public static partial class McpMod
             {
                 var option = parsed.TryGetValue("option", out var optElem) ? optElem.GetString() ?? "" : "";
                 var seed = parsed.TryGetValue("seed", out var seedElem) ? seedElem.GetString() : null;
-                var resultTask = RunOnMainThread(() => ExecuteMenuSelect(option, seed));
+                int? ascension = ReadOptionalInt(parsed, "ascension");
+                var resultTask = RunOnMainThread(() => ExecuteMenuSelect(option, seed, ascension));
                 var result = resultTask.GetAwaiter().GetResult();
                 SendJson(response, result);
             }
@@ -380,6 +381,17 @@ public static partial class McpMod
         {
             SendError(response, 500, $"Multiplayer action failed: {ex.Message}");
         }
+    }
+
+    private static int? ReadOptionalInt(Dictionary<string, JsonElement> data, string key)
+    {
+        if (!data.TryGetValue(key, out var elem))
+            return null;
+        if (elem.ValueKind == JsonValueKind.Number && elem.TryGetInt32(out int number))
+            return number;
+        if (elem.ValueKind == JsonValueKind.String && int.TryParse(elem.GetString(), out int parsedNumber))
+            return parsedNumber;
+        return null;
     }
 
     private static void HandleGetState(HttpListenerRequest request, HttpListenerResponse response)
@@ -457,7 +469,8 @@ public static partial class McpMod
             {
                 var option = parsed.TryGetValue("option", out var optElem) ? optElem.GetString() ?? "" : "";
                 var seed = parsed.TryGetValue("seed", out var seedElem) ? seedElem.GetString() : null;
-                var resultTask = RunOnMainThread(() => ExecuteMenuSelect(option, seed));
+                int? ascension = ReadOptionalInt(parsed, "ascension");
+                var resultTask = RunOnMainThread(() => ExecuteMenuSelect(option, seed, ascension));
                 var result = resultTask.GetAwaiter().GetResult();
                 SendJson(response, result);
             }

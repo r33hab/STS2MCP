@@ -1180,11 +1180,13 @@ public static partial class McpMod
         return null;
     }
 
-    internal static Dictionary<string, object?> ExecuteMenuSelect(string option, string? seed = null)
+    internal static Dictionary<string, object?> ExecuteMenuSelect(string option, string? seed = null, int? ascension = null)
     {
         option = option.Trim();
 
-        if (string.IsNullOrEmpty(option))
+        // An empty option is allowed when there is another instruction to carry out
+        // (currently: setting the ascension level on character select).
+        if (string.IsNullOrEmpty(option) && ascension == null)
             return Error("Missing menu option");
 
         var tree = (Engine.GetMainLoop()) as SceneTree;
@@ -1392,7 +1394,7 @@ public static partial class McpMod
         var charSelect = FindFirst<NCharacterSelectScreen>(tree.Root);
         if (charSelect != null && IsNodeVisible(charSelect))
         {
-            return ExecuteCharacterSelectMenuOption(charSelect, option, seed);
+            return ExecuteCharacterSelectMenuOption(charSelect, option, seed, ascension);
         }
 
         var profileScreen = FindFirst<NProfileScreen>(tree.Root);
@@ -1680,11 +1682,54 @@ public static partial class McpMod
         return Error($"Unknown load lobby option: {option}. Use: confirm, embark, unready, back");
     }
 
+    /// <summary>
+    /// Sets the ascension level on the character select screen.
+    /// SetAscensionLevel emits AscensionLevelChanged, which is what
+    /// NCharacterSelectScreen listens to before calling StartRunLobby.SyncAscensionChange —
+    /// i.e. the same path the on-screen arrows take.
+    /// </summary>
+    private static Dictionary<string, object?> ApplyAscension(NCharacterSelectScreen charSelect, int ascension)
+    {
+        var panel = GetInstanceFieldValue(charSelect, "_ascensionPanel") as NAscensionPanel;
+        if (panel == null)
+            return Error("Ascension panel is not available on this screen");
+
+        int maxAscension = GetInstanceFieldValue(panel, "_maxAscension") is int max ? max : 0;
+        if (ascension < 0 || ascension > maxAscension)
+            return Error($"Ascension {ascension} out of range (0-{maxAscension} unlocked for the selected character)");
+
+        panel.SetAscensionLevel(ascension);
+
+        int applied = panel.Ascension;
+        if (applied != ascension)
+            return Error($"Ascension did not take: asked for {ascension}, panel reports {applied}");
+
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["message"] = $"Ascension set to {applied}",
+            ["ascension"] = applied,
+            ["max_ascension"] = maxAscension
+        };
+    }
+
     private static Dictionary<string, object?> ExecuteCharacterSelectMenuOption(
         NCharacterSelectScreen charSelect,
         string option,
-        string? seed)
+        string? seed,
+        int? ascension = null)
     {
+        // "ascension" is applied before anything else so it can accompany either the
+        // character pick or the confirm, and can also be sent on its own.
+        if (ascension != null)
+        {
+            var ascensionResult = ApplyAscension(charSelect, ascension.Value);
+            if ((string?)ascensionResult["status"] == "error")
+                return ascensionResult;
+            if (string.IsNullOrEmpty(option))
+                return ascensionResult;
+        }
+
         if (string.Equals(option, "back", System.StringComparison.OrdinalIgnoreCase))
         {
             // _backButton leaves the lobby (and disconnects in MP). _unreadyButton is a
@@ -1742,9 +1787,18 @@ public static partial class McpMod
             var embarkBtn = GetInstanceFieldValue(charSelect, "_embarkButton");
             if (embarkBtn is NClickableControl embarkClickable && embarkClickable.IsEnabled)
             {
+                var panel = GetInstanceFieldValue(charSelect, "_ascensionPanel") as NAscensionPanel;
+                int? startingAscension = panel?.Ascension;
                 var msg = string.IsNullOrEmpty(seed) ? "Embarking on run" : $"Embarking on run (seed: {seed})";
+                if (startingAscension != null)
+                    msg += $" at ascension {startingAscension}";
                 embarkClickable.ForceClick();
-                return new Dictionary<string, object?> { ["status"] = "ok", ["message"] = msg };
+                return new Dictionary<string, object?>
+                {
+                    ["status"] = "ok",
+                    ["message"] = msg,
+                    ["ascension"] = startingAscension
+                };
             }
             return Error("Embark button not available — select a character first");
         }
