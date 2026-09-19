@@ -18,6 +18,7 @@ public static partial class McpMod
     {
         var query = request.QueryString["query"] ?? request.QueryString["q"] ?? "";
         var itemType = request.QueryString["type"] ?? request.QueryString["item_type"] ?? "all";
+        var scope = request.QueryString["scope"] ?? "discovered";
         var limit = ParseWikiLimit(request.QueryString["limit"]);
 
         if (string.IsNullOrWhiteSpace(query))
@@ -28,7 +29,7 @@ public static partial class McpMod
 
         try
         {
-            var dataTask = RunOnMainThread(() => BuildWikiSearch(query, itemType, limit));
+            var dataTask = RunOnMainThread(() => BuildWikiSearch(query, itemType, limit, scope));
             SendJson(response, dataTask.GetAwaiter().GetResult());
         }
         catch (Exception ex)
@@ -37,15 +38,15 @@ public static partial class McpMod
         }
     }
 
-    internal static object SearchWiki(string query, string itemType = "all", int? limit = null)
+    internal static object SearchWiki(string query, string itemType = "all", int? limit = null, string scope = "discovered")
     {
         if (string.IsNullOrWhiteSpace(query))
             return Error("query is required; wiki search does not return the full profile catalog.");
 
-        return BuildWikiSearch(query, itemType, NormalizeWikiLimit(limit ?? DefaultWikiSearchLimit));
+        return BuildWikiSearch(query, itemType, NormalizeWikiLimit(limit ?? DefaultWikiSearchLimit), scope);
     }
 
-    private static Dictionary<string, object?> BuildWikiSearch(string query, string itemType, int limit)
+    private static Dictionary<string, object?> BuildWikiSearch(string query, string itemType, int limit, string scope = "discovered")
     {
         var progress = SaveManager.Instance?.Progress;
         var saveManager = SaveManager.Instance;
@@ -55,6 +56,15 @@ public static partial class McpMod
         var normalizedItemType = NormalizeWikiItemType(itemType);
         if (normalizedItemType == null)
             return Error("item_type must be one of: all, card, relic.");
+
+        // Default stays spoiler-free: only what this profile has already seen.
+        // scope=all searches the whole catalog, which is what you need when a card
+        // reward generates a card you have never held and the alternative is passing
+        // on a rare because its effect is unknowable.
+        var normalizedScope = NormalizeWikiScope(scope);
+        if (normalizedScope == null)
+            return Error("scope must be one of: discovered, all.");
+        bool searchAll = normalizedScope == "all";
 
         var discoveredCards = progress.DiscoveredCards
             .Select(id => id.Entry)
@@ -67,9 +77,9 @@ public static partial class McpMod
 
         var candidates = new List<WikiCandidate>();
         if (normalizedItemType is "all" or "card")
-            candidates.AddRange(BuildCardWikiCandidates(discoveredCards));
+            candidates.AddRange(BuildCardWikiCandidates(discoveredCards, searchAll));
         if (normalizedItemType is "all" or "relic")
-            candidates.AddRange(BuildRelicWikiCandidates(discoveredRelics));
+            candidates.AddRange(BuildRelicWikiCandidates(discoveredRelics, searchAll));
 
         var matches = candidates
             .Select(candidate => new
@@ -91,8 +101,10 @@ public static partial class McpMod
             ["query"] = query,
             ["item_type"] = normalizedItemType,
             ["limit"] = limit,
-            ["scope"] = "active_profile_discovered_cards_and_relics",
-            ["selection_policy"] = "Searches only cards and relics discovered by the active profile, then returns the best fuzzy matches instead of exposing the full catalog.",
+            ["scope"] = searchAll ? "all_cards_and_relics" : "active_profile_discovered_cards_and_relics",
+            ["selection_policy"] = searchAll
+                ? "Searches the full card and relic catalog, including entries this profile has not discovered, and returns the best fuzzy matches. Each result carries a discovered flag."
+                : "Searches only cards and relics discovered by the active profile, then returns the best fuzzy matches instead of exposing the full catalog. Pass scope=all to include undiscovered entries.",
             ["counts"] = new Dictionary<string, object?>
             {
                 ["discovered_cards"] = discoveredCards.Count,
@@ -114,6 +126,17 @@ public static partial class McpMod
     private static int NormalizeWikiLimit(int limit)
         => Math.Clamp(limit, 1, MaxWikiSearchLimit);
 
+    private static string? NormalizeWikiScope(string? scope)
+    {
+        var value = (scope ?? "discovered").Trim().ToLowerInvariant();
+        return value switch
+        {
+            "" or "discovered" or "active_profile" => "discovered",
+            "all" or "catalog" or "everything" => "all",
+            _ => null
+        };
+    }
+
     private static string? NormalizeWikiItemType(string? itemType)
     {
         var value = (itemType ?? "all").Trim().ToLowerInvariant();
@@ -132,13 +155,16 @@ public static partial class McpMod
     // ModelDb._contentById), so card.Id.Entry comes back empty and the
     // discoveredIds filter drops everything. ModelDb.AllCards also naturally
     // includes mod-injected cards.
-    private static IEnumerable<WikiCandidate> BuildCardWikiCandidates(HashSet<string> discoveredIds)
+    private static IEnumerable<WikiCandidate> BuildCardWikiCandidates(HashSet<string> discoveredIds, bool includeUndiscovered = false)
     {
         var byId = new Dictionary<string, WikiCandidate>(StringComparer.OrdinalIgnoreCase);
         foreach (var card in ModelDb.AllCards)
         {
             var id = SafeGetText(() => card.Id.Entry);
-            if (string.IsNullOrWhiteSpace(id) || !discoveredIds.Contains(id))
+            if (string.IsNullOrWhiteSpace(id))
+                continue;
+            bool discovered = discoveredIds.Contains(id);
+            if (!discovered && !includeUndiscovered)
                 continue;
 
             byId.TryAdd(id, new WikiCandidate(
@@ -147,19 +173,23 @@ public static partial class McpMod
                 Name: SafeGetText(() => card.Title) ?? id,
                 SearchText: BuildWikiSearchText("card", id, SafeGetText(() => card.Title), SafeGetText(() => card.Type), SafeGetText(() => card.Rarity)),
                 Card: card,
-                Relic: null));
+                Relic: null,
+                Discovered: discovered));
         }
 
         return byId.Values;
     }
 
-    private static IEnumerable<WikiCandidate> BuildRelicWikiCandidates(HashSet<string> discoveredIds)
+    private static IEnumerable<WikiCandidate> BuildRelicWikiCandidates(HashSet<string> discoveredIds, bool includeUndiscovered = false)
     {
         var byId = new Dictionary<string, WikiCandidate>(StringComparer.OrdinalIgnoreCase);
         foreach (var relic in ModelDb.AllRelics)
         {
             var id = SafeGetText(() => relic.Id.Entry);
-            if (string.IsNullOrWhiteSpace(id) || !discoveredIds.Contains(id))
+            if (string.IsNullOrWhiteSpace(id))
+                continue;
+            bool discovered = discoveredIds.Contains(id);
+            if (!discovered && !includeUndiscovered)
                 continue;
 
             byId.TryAdd(id, new WikiCandidate(
@@ -168,7 +198,8 @@ public static partial class McpMod
                 Name: SafeGetText(() => relic.Title) ?? id,
                 SearchText: BuildWikiSearchText("relic", id, SafeGetText(() => relic.Title), SafeGetText(() => relic.Rarity)),
                 Card: null,
-                Relic: relic));
+                Relic: relic,
+                Discovered: discovered));
         }
 
         return byId.Values;
@@ -186,7 +217,8 @@ public static partial class McpMod
             ["item_type"] = candidate.Kind,
             ["id"] = candidate.Id,
             ["name"] = candidate.Name,
-            ["score"] = Math.Round(score, 3)
+            ["score"] = Math.Round(score, 3),
+            ["discovered"] = candidate.Discovered
         };
     }
 
@@ -211,6 +243,7 @@ public static partial class McpMod
             ["id"] = candidate.Id,
             ["name"] = candidate.Name,
             ["score"] = Math.Round(score, 3),
+            ["discovered"] = candidate.Discovered,
             ["rarity"] = SafeGetText(() => card.Rarity),
             ["type"] = SafeGetText(() => card.Type),
             ["is_upgradable"] = card.IsUpgradable,
@@ -252,6 +285,7 @@ public static partial class McpMod
             ["id"] = candidate.Id,
             ["name"] = candidate.Name,
             ["score"] = Math.Round(score, 3),
+            ["discovered"] = candidate.Discovered,
             ["rarity"] = SafeGetText(() => relic.Rarity),
             ["description"] = SafeGetText(() => relic.DynamicDescription),
             ["keywords"] = BuildHoverTips(relic.HoverTipsExcludingRelic)
@@ -385,5 +419,6 @@ public static partial class McpMod
         string Name,
         string SearchText,
         CardModel? Card,
-        RelicModel? Relic);
+        RelicModel? Relic,
+        bool Discovered = true);
 }

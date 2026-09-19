@@ -86,10 +86,10 @@ async def _compendium_get() -> str:
     return r.text
 
 
-async def _wiki_get(query: str, item_type: str = "all", limit: int = 10) -> str:
+async def _wiki_get(query: str, item_type: str = "all", limit: int = 10, scope: str = "discovered") -> str:
     r = await _get_client().get(
         _wiki_url(),
-        params={"query": query, "item_type": item_type, "limit": limit},
+        params={"query": query, "item_type": item_type, "limit": limit, "scope": scope},
     )
     r.raise_for_status()
     return r.text
@@ -245,22 +245,25 @@ async def get_compendium() -> str:
 
 
 @mcp.tool()
-async def search_wiki(query: str, item_type: str = "all", limit: int = 10) -> str:
-    """Search discovered card and relic wiki entries for the active profile.
+async def search_wiki(query: str, item_type: str = "all", limit: int = 10, scope: str = "discovered") -> str:
+    """Search card and relic wiki entries.
 
-    Uses fuzzy matching over profile-unlocked content only, so agents can ask
-    for a card or relic by approximate name without receiving the entire game
-    catalog. Card results include both base and upgraded variants when the card
-    can be upgraded.
+    Uses fuzzy matching so agents can ask for a card or relic by approximate
+    name without receiving the entire game catalog. Card results include both
+    base and upgraded variants when the card can be upgraded.
 
     Args:
         query: Search text such as "ironclad perfect strike" or "silver spoon".
         item_type: "all", "card", or "relic".
         limit: Maximum results to return. Defaults to 10; the mod clamps it to
             a bounded maximum.
+        scope: "discovered" (default) searches only what the active profile has
+            already seen. "all" searches the full catalog — use it when a card
+            or relic on offer generates something this profile has never held.
+            Every result carries a `discovered` flag either way.
     """
     try:
-        return await _wiki_get(query, item_type, limit)
+        return await _wiki_get(query, item_type, limit, scope)
     except Exception as e:
         return _handle_error(e)
 
