@@ -74,6 +74,7 @@ public static partial class McpMod
             "claim_reward" => ExecuteClaimReward(data),
             "select_card_reward" => ExecuteSelectCardReward(data),
             "skip_card_reward" => ExecuteSkipCardReward(),
+            "select_card_reward_alternative" => ExecuteSelectCardRewardAlternative(data),
             "proceed" => ExecuteProceed(),
             "select_card" => ExecuteSelectCard(data),
             "confirm_selection" => ExecuteConfirmSelection(),
@@ -672,18 +673,89 @@ public static partial class McpMod
         if (overlay is not NCardRewardSelectionScreen cardScreen)
             return Error("Card reward selection screen is not open");
 
-        var altButtons = FindAll<NCardRewardAlternativeButton>(cardScreen);
-        if (altButtons.Count == 0)
+        var alternatives = BuildCardRewardAlternatives(cardScreen);
+        if (alternatives.Count == 0)
             return Error("No skip option available on this card reward");
 
-        altButtons[0].ForceClick();
+        // Pick the Skip option by id rather than "whatever button is first". A relic
+        // can add its own alternative (Pael's Wing's SACRIFICE), and clicking the wrong
+        // one here silently spends the reward on something else.
+        int skipIndex = alternatives.FindIndex(a =>
+            string.Equals(a.GetValueOrDefault("option_id")?.ToString(), "Skip", System.StringComparison.OrdinalIgnoreCase));
+        if (skipIndex < 0)
+            return Error(
+                "No Skip option on this card reward. Available: "
+                + DescribeAlternatives(alternatives)
+                + ". Use select_card_reward_alternative.");
+
+        return ClickCardRewardAlternative(cardScreen, alternatives, skipIndex);
+    }
+
+    /// <summary>
+    /// Takes one of the card reward's alternative options by id (preferred) or index.
+    ///
+    /// Skip used to be the only one reachable, so a relic that adds its own alternative
+    /// was unusable from the API — Pael's Wing turns a card reward into progress towards
+    /// a relic, and skip_card_reward does not count as sacrificing, so the relic did
+    /// nothing at all for a whole run.
+    /// </summary>
+    private static Dictionary<string, object?> ExecuteSelectCardRewardAlternative(Dictionary<string, JsonElement> data)
+    {
+        var overlay = NOverlayStack.Instance?.Peek();
+        if (overlay is not NCardRewardSelectionScreen cardScreen)
+            return Error("Card reward selection screen is not open");
+
+        var alternatives = BuildCardRewardAlternatives(cardScreen);
+        if (alternatives.Count == 0)
+            return Error("This card reward has no alternative options");
+
+        string? optionId = TryReadStringParam(data, "option_id", "option", "alternative");
+        int chosen;
+
+        if (optionId != null)
+        {
+            chosen = alternatives.FindIndex(a =>
+                string.Equals(a.GetValueOrDefault("option_id")?.ToString(), optionId, System.StringComparison.OrdinalIgnoreCase)
+                || string.Equals(a.GetValueOrDefault("title")?.ToString(), optionId, System.StringComparison.OrdinalIgnoreCase));
+            if (chosen < 0)
+                return Error($"No alternative '{optionId}' on this card reward. Available: {DescribeAlternatives(alternatives)}");
+        }
+        else
+        {
+            if (!TryGetIntParam(data, out chosen, "index", "option_index"))
+                return Error($"Missing 'option_id' (or 'index'). Available: {DescribeAlternatives(alternatives)}");
+            if (chosen < 0 || chosen >= alternatives.Count)
+                return Error($"Alternative index {chosen} out of range ({alternatives.Count} options). Available: {DescribeAlternatives(alternatives)}");
+        }
+
+        return ClickCardRewardAlternative(cardScreen, alternatives, chosen);
+    }
+
+    private static Dictionary<string, object?> ClickCardRewardAlternative(
+        NCardRewardSelectionScreen cardScreen,
+        List<Dictionary<string, object?>> alternatives,
+        int index)
+    {
+        var buttons = FindAll<NCardRewardAlternativeButton>(cardScreen);
+        if (index < 0 || index >= buttons.Count)
+            return Error($"Alternative index {index} is no longer on screen; re-read state");
+
+        var button = buttons[index];
+        if (!button.IsEnabled)
+            return Error($"Alternative '{alternatives[index].GetValueOrDefault("option_id")}' is disabled");
+
+        button.ForceClick();
 
         return new Dictionary<string, object?>
         {
             ["status"] = "ok",
-            ["message"] = "Skipping card reward"
+            ["message"] = $"Taking card reward alternative: {alternatives[index].GetValueOrDefault("title") ?? alternatives[index].GetValueOrDefault("option_id")}",
+            ["option_id"] = alternatives[index].GetValueOrDefault("option_id")
         };
     }
+
+    private static string DescribeAlternatives(List<Dictionary<string, object?>> alternatives)
+        => string.Join(", ", alternatives.Select(a => $"[{a.GetValueOrDefault("index")}] {a.GetValueOrDefault("option_id")}"));
 
     private static Dictionary<string, object?> ExecuteProceed()
     {

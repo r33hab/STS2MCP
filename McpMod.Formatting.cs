@@ -903,6 +903,21 @@ public static partial class McpMod
             sb.AppendLine();
         }
 
+        // Relics add their own options here (Pael's Wing's SACRIFICE). Taking one is
+        // not the same as skipping, so list them all rather than a skip yes/no.
+        if (cardReward.TryGetValue("alternatives", out var altObj)
+            && altObj is List<Dictionary<string, object?>> alternatives && alternatives.Count > 0)
+        {
+            sb.AppendLine("**Alternatives** (`select_card_reward_alternative option_id <id>`):");
+            foreach (var alt in alternatives)
+            {
+                string title = alt.GetValueOrDefault("title")?.ToString() ?? "";
+                string disabled = alt.TryGetValue("enabled", out var en) && en is false ? " *(disabled)*" : "";
+                sb.AppendLine($"- [{alt["index"]}] `{alt["option_id"]}`{(title.Length > 0 ? $" — {title}" : "")}{disabled}");
+            }
+            sb.AppendLine();
+        }
+
         bool canSkip = cardReward.TryGetValue("can_skip", out var cs) && cs is true;
         sb.AppendLine($"**Can skip:** {(canSkip ? "Yes" : "No")}");
         sb.AppendLine();
