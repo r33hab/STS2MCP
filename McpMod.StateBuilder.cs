@@ -735,6 +735,19 @@ public static partial class McpMod
             });
         }
 
+        // Ascension is chosen on this screen and decides the run's difficulty, so it
+        // belongs in state whether or not a lobby is involved — a caller that cannot
+        // read the current level cannot check what it is about to start.
+        var ascensionPanel = GetInstanceFieldValue(charSelect, "_ascensionPanel") as NAscensionPanel;
+        if (ascensionPanel != null)
+        {
+            result["ascension"] = ascensionPanel.Ascension;
+            var maxAscension = GetInstanceFieldValue(ascensionPanel, "_maxAscension");
+            if (maxAscension is int maxAsc)
+                result["max_ascension"] = maxAsc;
+            result["ascension_selectable"] = IsNodeVisible(ascensionPanel);
+        }
+
         // MP lobby block — surfaces roster / ready state / ascension when this character
         // select is part of a host or client lobby. SP runs leave the field absent.
         bool isMpCharSelect = false;
