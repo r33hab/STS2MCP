@@ -216,6 +216,23 @@ async def menu_select(option: str, seed: str | None = None, ascension: int | Non
 
 
 @mcp.tool()
+async def timeline_reveal_epochs() -> str:
+    """Reveal every obtained-but-unrevealed timeline epoch.
+
+    A finished run leaves its epochs "obtained". Until they are revealed the main
+    menu hides `singleplayer`, so no new run can be started. Call this from the
+    main menu and repeat until the response has `done: true`; `pending_epoch_ids`
+    shows what is left. It opens the Timeline, reveals each pending epoch through
+    the game's own reveal path (granting the epoch's unlocks and writing progress),
+    and returns to the main menu when finished.
+    """
+    try:
+        return await _post({"action": "timeline_reveal_epochs"})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
 async def get_profile() -> str:
     """Get the current profile's persistent progress summary.
 

@@ -351,18 +351,6 @@ public static partial class McpMod
                                         clickable.Visible &&
                                         clickable.IsVisibleInTree())
                                     {
-                                        if (labels[i] == "timeline" && unrevealedEpochs.Count > 0)
-                                        {
-                                            blockedOptions.Add(new Dictionary<string, object?>
-                                            {
-                                                ["name"] = "timeline",
-                                                ["enabled"] = false,
-                                                ["reason"] = "manual_epoch_reveal_required",
-                                                ["pending_epoch_ids"] = unrevealedEpochs
-                                            });
-                                            continue;
-                                        }
-
                                         options.Add(labels[i]);
                                     }
                                 }
@@ -372,6 +360,18 @@ public static partial class McpMod
                                 result["options"] = options;
                             if (blockedOptions.Count > 0)
                                 result["blocked_options"] = blockedOptions;
+
+                            // A finished run leaves its epochs obtained-but-unrevealed,
+                            // and the main menu hides `singleplayer` until they are
+                            // revealed. Say so, and name the action that clears it.
+                            if (unrevealedEpochs.Count > 0)
+                            {
+                                result["pending_epoch_ids"] = unrevealedEpochs;
+                                result["message"] =
+                                    $"Main menu. {unrevealedEpochs.Count} epoch(s) obtained but not revealed - "
+                                    + "the singleplayer option stays hidden until they are. "
+                                    + "Run the 'timeline_reveal_epochs' action (repeat until done) to clear this.";
+                            }
                         }
                         }
                     }
