@@ -197,18 +197,37 @@ public static partial class McpMod
         };
     }
 
+    /// <summary>
+    /// "slot" is the fixed slot number on the potion belt, not an index into the
+    /// non-empty potions. After using the potion in slot 0, the survivor stays in
+    /// slot 1 — asking for slot 0 then has to say so, and say where the potions are.
+    /// </summary>
+    private static string DescribeEmptyPotionSlot(Player player, int slot)
+    {
+        var occupied = new List<string>();
+        for (int i = 0; i < player.PotionSlots.Count; i++)
+        {
+            var p = player.GetPotionAtSlotIndex(i);
+            if (p != null)
+                occupied.Add($"{i}={SafeGetText(() => p.Title) ?? "?"}");
+        }
+
+        return occupied.Count == 0
+            ? $"No potion in slot {slot} (no potions held)"
+            : $"No potion in slot {slot}. Occupied slots: {string.Join(", ", occupied)}. "
+              + "'slot' is the belt slot from state player.potions[].slot, not a position in the list.";
+    }
+
     private static Dictionary<string, object?> ExecuteUsePotion(Player player, Dictionary<string, JsonElement> data)
     {
-        if (!data.TryGetValue("slot", out var slotElem))
-            return Error("Missing 'slot' (potion slot index)");
-
-        int slot = slotElem.GetInt32();
+        if (!TryGetIntParam(data, out int slot, "slot", "potion_index", "index"))
+            return MissingIntParam("potion slot index", "slot", "potion_index", "index");
         if (slot < 0 || slot >= player.PotionSlots.Count)
             return Error($"Potion slot {slot} out of range (player has {player.PotionSlots.Count} slots)");
 
         var potion = player.GetPotionAtSlotIndex(slot);
         if (potion == null)
-            return Error($"No potion in slot {slot}");
+            return Error(DescribeEmptyPotionSlot(player, slot));
         if (potion.IsQueued)
             return Error($"Potion '{SafeGetText(() => potion.Title)}' is already queued for use");
         if (potion.Owner.Creature.IsDead)
@@ -274,16 +293,14 @@ public static partial class McpMod
 
     private static Dictionary<string, object?> ExecuteDiscardPotion(Player player, Dictionary<string, JsonElement> data)
     {
-        if (!data.TryGetValue("slot", out var slotElem))
-            return Error("Missing 'slot' (potion slot index)");
-
-        int slot = slotElem.GetInt32();
+        if (!TryGetIntParam(data, out int slot, "slot", "potion_index", "index"))
+            return MissingIntParam("potion slot index", "slot", "potion_index", "index");
         if (slot < 0 || slot >= player.PotionSlots.Count)
             return Error($"Potion slot {slot} out of range (player has {player.PotionSlots.Count} slots)");
 
         var potion = player.GetPotionAtSlotIndex(slot);
         if (potion == null)
-            return Error($"No potion in slot {slot}");
+            return Error(DescribeEmptyPotionSlot(player, slot));
 
         string potionName = SafeGetText(() => potion.Title) ?? "unknown";
         _ = PotionCmd.Discard(potion);
