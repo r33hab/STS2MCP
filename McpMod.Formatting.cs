@@ -462,7 +462,15 @@ public static partial class McpMod
                 return $"{label}: -";
             string hits = t.TryGetValue("hits", out var h) && h != null
                 ? $" x{h} = {t.GetValueOrDefault("total_damage")}" : "";
-            return $"{label}: {dmg}{hits}";
+            // A damage cap turns a big hit into a wasted card; say so on the same line.
+            string cap = "";
+            if (t.TryGetValue("damage_cap", out var capObj) && capObj is Dictionary<string, object?> c)
+            {
+                cap = c.TryGetValue("effective_damage", out var eff) && eff != null
+                    ? $" ⚠ actually {eff} ({c.GetValueOrDefault("capped_by")})"
+                    : $" ⚠ capped by {c.GetValueOrDefault("capped_by")}";
+            }
+            return $"{label}: {dmg}{hits}{cap}";
         });
         sb.AppendLine($"  - resolved damage: {string.Join(", ", parts)}");
     }
