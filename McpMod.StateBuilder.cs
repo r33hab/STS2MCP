@@ -1432,6 +1432,13 @@ public static partial class McpMod
                     if (block != null)
                         preview["block"] = block;
 
+                    if (damage != null)
+                    {
+                        var cap = BuildDamageCap(enemy, damage.Value, hits ?? 1);
+                        if (cap != null)
+                            preview["damage_cap"] = cap;
+                    }
+
                     if (values.Count > 0)
                         preview["values"] = values;
 
@@ -1451,7 +1458,14 @@ public static partial class McpMod
         return previews;
     }
 
-    /// <summary>Every dynamic var on this card, by name, at its current (preview) value.</summary>
+    /// <summary>
+    /// Every dynamic var on this card, by name, at its previewed value.
+    ///
+    /// Reads PreviewValue, not IntValue: IntValue is <c>(int)BaseValue</c>, i.e. the
+    /// printed number before any modifier. The preview run just before this is what
+    /// folds in Strength, the target's Vulnerable and everything else ModifyDamage
+    /// applies, and it writes its result to PreviewValue.
+    /// </summary>
     private static Dictionary<string, object?> ReadDynamicVarValues(CardModel card)
     {
         var values = new Dictionary<string, object?>();
@@ -1459,13 +1473,76 @@ public static partial class McpMod
         {
             foreach (var (name, dynamicVar) in card.DynamicVars)
             {
-                int? value = SafeGetInt(() => dynamicVar.IntValue);
+                int? value = SafeGetInt(() => (int)System.Math.Round(dynamicVar.PreviewValue,
+                    System.MidpointRounding.ToZero));
+                value ??= SafeGetInt(() => dynamicVar.IntValue);
                 if (value != null)
                     values[name] = value;
             }
         }
         catch { /* best effort */ }
         return values;
+    }
+
+    /// <summary>
+    /// Powers that cap how much HP a creature can lose, per hit. Damage modifiers do not
+    /// see these — they are applied when the damage lands — so a 18-damage card against
+    /// Slippery takes the enemy down by 1, and reporting 18 sends the caller into a
+    /// fight it cannot win. Keyed by power type because that survives an id rename.
+    /// </summary>
+    private static readonly Dictionary<string, string> _perHitDamageCaps = new()
+    {
+        ["SlipperyPower"] = "next hit reduced to 1",
+        ["IntangiblePower"] = "all damage reduced to 1",
+        ["HardToKillPower"] = "all damage reduced to the power's amount"
+    };
+
+    private const string HardenedShellPowerName = "HardenedShellPower";
+
+    /// <summary>
+    /// Describes any cap on what this target can actually lose from one hit, and the
+    /// resulting effective damage. Returns null when nothing caps it.
+    /// </summary>
+    private static Dictionary<string, object?>? BuildDamageCap(Creature target, int damage, int hits)
+    {
+        try
+        {
+            foreach (var power in target.Powers)
+            {
+                string typeName = power.GetType().Name;
+
+                if (_perHitDamageCaps.TryGetValue(typeName, out var note))
+                {
+                    int perHit = typeName == "HardToKillPower" ? System.Math.Max(power.Amount, 0) : 1;
+                    int capped = System.Math.Min(damage, perHit);
+                    int remaining = typeName == "SlipperyPower" ? System.Math.Max(power.Amount, 0) : int.MaxValue;
+                    int cappedHits = System.Math.Min(hits, remaining);
+
+                    return new Dictionary<string, object?>
+                    {
+                        ["capped_by"] = SafeGetText(() => power.Title) ?? typeName,
+                        ["power_id"] = SafeGetText(() => power.Id.Entry),
+                        ["per_hit_max"] = perHit,
+                        ["note"] = note,
+                        ["effective_damage"] = capped * cappedHits + System.Math.Max(hits - cappedHits, 0) * damage
+                    };
+                }
+
+                if (typeName == HardenedShellPowerName)
+                {
+                    return new Dictionary<string, object?>
+                    {
+                        ["capped_by"] = SafeGetText(() => power.Title) ?? typeName,
+                        ["power_id"] = SafeGetText(() => power.Id.Entry),
+                        ["per_turn_max"] = power.Amount,
+                        ["note"] = "total HP lost this turn is capped, not per hit"
+                    };
+                }
+            }
+        }
+        catch { /* best effort */ }
+
+        return null;
     }
 
     private static int? PickDynamicVar(Dictionary<string, object?> values, params string[] names)
