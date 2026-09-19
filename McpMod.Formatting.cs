@@ -625,6 +625,18 @@ public static partial class McpMod
             sb.AppendLine();
         }
 
+        if (map.TryGetValue("marked_nodes", out var markedObj)
+            && markedObj is List<Dictionary<string, object?>> markedNodes && markedNodes.Count > 0)
+        {
+            var labels = markedNodes.Select(n =>
+            {
+                var by = n.TryGetValue("marked_by", out var b) && b is List<string> bl ? string.Join("/", bl) : "?";
+                return $"({n["col"]},{n["row"]}) by {by}";
+            });
+            sb.AppendLine($"**Marked rooms:** {string.Join(", ", labels)}");
+            sb.AppendLine();
+        }
+
         // Build node lookup for path traversal
         var nodeLookup = new Dictionary<string, Dictionary<string, object?>>();
         if (map.TryGetValue("nodes", out var nodesObj) && nodesObj is List<Dictionary<string, object?>> nodes)
@@ -639,7 +651,9 @@ public static partial class McpMod
             sb.AppendLine("## Choose Next Node");
             foreach (var opt in options)
             {
-                sb.AppendLine($"- [{opt["index"]}] **{opt["type"]}** ({opt["col"]},{opt["row"]})");
+                string marked = opt.TryGetValue("marked_by", out var mb) && mb is List<string> mbl && mbl.Count > 0
+                    ? $" [marked by {string.Join(", ", mbl)}]" : "";
+                sb.AppendLine($"- [{opt["index"]}] **{opt["type"]}** ({opt["col"]},{opt["row"]}){marked}");
                 string tree = BuildFuturePathTree(opt, nodeLookup);
                 if (tree.Length > 0)
                     sb.AppendLine($"  Future paths: {tree}");
