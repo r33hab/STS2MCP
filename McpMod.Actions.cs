@@ -91,6 +91,35 @@ public static partial class McpMod
         };
     }
 
+    /// <summary>
+    /// Reads an integer parameter, accepting any of the given names.
+    /// Actions historically disagreed on whether the card index was called
+    /// "card_index" or "index", which produced a run of silent no-ops and
+    /// "Missing 'index'" errors for callers that guessed the other spelling.
+    /// Every name listed here is accepted; the first one is what the error names.
+    /// </summary>
+    private static bool TryGetIntParam(
+        Dictionary<string, JsonElement> data,
+        out int value,
+        params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!data.TryGetValue(name, out var elem))
+                continue;
+            if (elem.ValueKind == JsonValueKind.Number && elem.TryGetInt32(out value))
+                return true;
+            if (elem.ValueKind == JsonValueKind.String
+                && int.TryParse(elem.GetString(), out value))
+                return true;
+        }
+        value = 0;
+        return false;
+    }
+
+    private static Dictionary<string, object?> MissingIntParam(string description, params string[] names)
+        => Error($"Missing '{names[0]}' ({description}). Accepted names: {string.Join(", ", names)}");
+
     private static Dictionary<string, object?> ExecutePlayCard(Player player, Dictionary<string, JsonElement> data)
     {
         if (!CombatManager.Instance.IsInProgress)
@@ -107,10 +136,9 @@ public static partial class McpMod
             return Error("No combat state");
 
         // Get card by index in hand
-        if (!data.TryGetValue("card_index", out var indexElem))
-            return Error("Missing 'card_index'");
+        if (!TryGetIntParam(data, out int cardIndex, "card_index", "index"))
+            return MissingIntParam("index of the card in hand", "card_index", "index");
 
-        int cardIndex = indexElem.GetInt32();
         var hand = player.PlayerCombatState?.Hand;
         if (hand == null)
             return Error("No hand available");
@@ -273,10 +301,8 @@ public static partial class McpMod
         if (uiRoom == null)
             return Error("Event room is not open");
 
-        if (!data.TryGetValue("index", out var indexElem))
-            return Error("Missing 'index' (event option index)");
-
-        int index = indexElem.GetInt32();
+        if (!TryGetIntParam(data, out int index, "index", "option_index"))
+            return MissingIntParam("event option index", "index", "option_index");
 
         var buttons = FindAll<NEventOptionButton>(uiRoom);
 
@@ -323,10 +349,8 @@ public static partial class McpMod
 
     private static Dictionary<string, object?> ExecuteChooseRestOption(Dictionary<string, JsonElement> data)
     {
-        if (!data.TryGetValue("index", out var indexElem))
-            return Error("Missing 'index' (rest site option index)");
-
-        int index = indexElem.GetInt32();
+        if (!TryGetIntParam(data, out int index, "index", "option_index"))
+            return MissingIntParam("rest site option index", "index", "option_index");
 
         var restRoom = NRestSiteRoom.Instance;
         if (restRoom == null)
@@ -398,10 +422,8 @@ public static partial class McpMod
         if (inventory == null)
             return Error("Shop inventory not ready yet; wait a moment and retry");
 
-        if (!data.TryGetValue("index", out var indexElem))
-            return Error("Missing 'index' (shop item index)");
-
-        int index = indexElem.GetInt32();
+        if (!TryGetIntParam(data, out int index, "index", "item_index"))
+            return MissingIntParam("shop item index", "index", "item_index");
 
         var allEntries = inventory.AllEntries.ToList();
         if (index < 0 || index >= allEntries.Count)
@@ -429,10 +451,8 @@ public static partial class McpMod
         if (mapScreen == null || (!mapScreen.IsOpen && !IsNodeVisible(mapScreen)))
             return Error("Map screen is not open");
 
-        if (!data.TryGetValue("index", out var indexElem))
-            return Error("Missing 'index' (map node index from next_options)");
-
-        int index = indexElem.GetInt32();
+        if (!TryGetIntParam(data, out int index, "index", "node_index"))
+            return MissingIntParam("map node index from next_options", "index", "node_index");
 
         var travelable = FindAll<NMapPoint>(mapScreen)
             .Where(mp => mp.State == MapPointState.Travelable && mp.Point != null)
@@ -461,10 +481,8 @@ public static partial class McpMod
         if (overlay is not NRewardsScreen rewardsScreen)
             return Error("Rewards screen is not open");
 
-        if (!data.TryGetValue("index", out var indexElem))
-            return Error("Missing 'index' (reward index)");
-
-        int index = indexElem.GetInt32();
+        if (!TryGetIntParam(data, out int index, "index", "reward_index"))
+            return MissingIntParam("reward index", "index", "reward_index");
 
         var enabledButtons = FindAll<NRewardButton>(rewardsScreen)
             .Where(b => b.IsEnabled && b.Reward != null)
@@ -498,10 +516,8 @@ public static partial class McpMod
         if (overlay is not NCardRewardSelectionScreen cardScreen)
             return Error("Card reward selection screen is not open");
 
-        if (!data.TryGetValue("card_index", out var indexElem))
-            return Error("Missing 'card_index'");
-
-        int cardIndex = indexElem.GetInt32();
+        if (!TryGetIntParam(data, out int cardIndex, "card_index", "index"))
+            return MissingIntParam("index of the offered card", "card_index", "index");
 
         var cardHolders = FindAllSortedByPosition<NCardHolder>(cardScreen);
         if (cardIndex < 0 || cardIndex >= cardHolders.Count)
@@ -612,10 +628,8 @@ public static partial class McpMod
     {
         var overlay = NOverlayStack.Instance?.Peek();
 
-        if (!data.TryGetValue("index", out var indexElem))
-            return Error("Missing 'index' (card index in the grid)");
-
-        int index = indexElem.GetInt32();
+        if (!TryGetIntParam(data, out int index, "index", "card_index"))
+            return MissingIntParam("card index in the grid", "index", "card_index");
 
         if (overlay is NCardGridSelectionScreen gridScreen)
         {
@@ -783,10 +797,9 @@ public static partial class McpMod
         if (overlay is not NChooseABundleSelectionScreen screen)
             return Error("No bundle selection screen is open");
 
-        if (!data.TryGetValue("index", out var indexElem))
-            return Error("Missing 'index' (bundle index)");
+        if (!TryGetIntParam(data, out int index, "index", "bundle_index"))
+            return MissingIntParam("bundle index", "index", "bundle_index");
 
-        int index = indexElem.GetInt32();
         var previewContainer = screen.GetNodeOrNull<Godot.Control>("%BundlePreviewContainer");
         if (previewContainer?.Visible == true)
             return Error("A bundle preview is already open - confirm or cancel it first");
@@ -845,10 +858,9 @@ public static partial class McpMod
         if (hand == null || !hand.IsInCardSelection)
             return Error("No in-combat card selection is active");
 
-        if (!data.TryGetValue("card_index", out var indexElem))
-            return Error("Missing 'card_index' (index of the card in hand)");
+        if (!TryGetIntParam(data, out int index, "card_index", "index"))
+            return MissingIntParam("index of the card in hand", "card_index", "index");
 
-        int index = indexElem.GetInt32();
         var holders = hand.ActiveHolders;
         if (index < 0 || index >= holders.Count)
             return Error($"Card index {index} out of range ({holders.Count} selectable cards)");
@@ -891,10 +903,8 @@ public static partial class McpMod
         if (overlay is not NChooseARelicSelection screen)
             return Error("No relic selection screen is open");
 
-        if (!data.TryGetValue("index", out var indexElem))
-            return Error("Missing 'index' (relic index)");
-
-        int index = indexElem.GetInt32();
+        if (!TryGetIntParam(data, out int index, "index", "relic_index"))
+            return MissingIntParam("relic index", "index", "relic_index");
 
         var holders = FindAll<NRelicBasicHolder>(screen);
         if (index < 0 || index >= holders.Count)
@@ -941,10 +951,8 @@ public static partial class McpMod
         if (relicCollection?.Visible != true)
             return Error("Relic collection is not visible - chest may not be opened yet");
 
-        if (!data.TryGetValue("index", out var indexElem))
-            return Error("Missing 'index' (relic index)");
-
-        int index = indexElem.GetInt32();
+        if (!TryGetIntParam(data, out int index, "index", "relic_index"))
+            return MissingIntParam("relic index", "index", "relic_index");
 
         var holders = FindAll<NTreasureRoomRelicHolder>(relicCollection)
             .Where(h => h.IsEnabled && h.Visible)
