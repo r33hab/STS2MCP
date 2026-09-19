@@ -2360,10 +2360,62 @@ public static partial class McpMod
         }
         state["cards"] = cards;
 
-        var altButtons = FindAll<NCardRewardAlternativeButton>(cardScreen);
-        state["can_skip"] = altButtons.Count > 0;
+        // Alternatives are the row of buttons beside the cards. "Skip" is only one of
+        // them: relics add their own (Pael's Wing adds SACRIFICE, a reroll relic adds
+        // REROLL), and skipping is NOT the same as taking one of those — Pael's Wing
+        // counts sacrifices, and skip_card_reward does not count. State used to report
+        // a single can_skip boolean, so the other options were invisible from the API
+        // and the relic's whole function was unreachable.
+        var alternatives = BuildCardRewardAlternatives(cardScreen);
+        state["alternatives"] = alternatives;
+        state["can_skip"] = alternatives.Any(a =>
+            string.Equals(a.GetValueOrDefault("option_id")?.ToString(), "Skip", StringComparison.OrdinalIgnoreCase));
 
         return state;
+    }
+
+    /// <summary>
+    /// The card reward's alternative options, in the order their buttons appear.
+    /// Ids come from the screen's own CardRewardAlternative list where readable, so an
+    /// option added by a relic this code has never heard of still shows up.
+    /// </summary>
+    private static List<Dictionary<string, object?>> BuildCardRewardAlternatives(NCardRewardSelectionScreen cardScreen)
+    {
+        var result = new List<Dictionary<string, object?>>();
+        var buttons = FindAll<NCardRewardAlternativeButton>(cardScreen);
+
+        var optionIds = new List<string>();
+        try
+        {
+            if (GetInstanceFieldValue(cardScreen, "_extraOptions") is System.Collections.IEnumerable options)
+            {
+                foreach (var option in options)
+                {
+                    var id = GetPropertyValue(option, "OptionId")?.ToString();
+                    optionIds.Add(id ?? "");
+                }
+            }
+        }
+        catch { /* fall back to button labels below */ }
+
+        for (int i = 0; i < buttons.Count; i++)
+        {
+            var button = buttons[i];
+            string? label = SafeGetText(() => GetInstanceFieldValue(button, "_optionName"));
+            string optionId = i < optionIds.Count && !string.IsNullOrWhiteSpace(optionIds[i])
+                ? optionIds[i]
+                : label ?? $"option_{i}";
+
+            result.Add(new Dictionary<string, object?>
+            {
+                ["index"] = i,
+                ["option_id"] = optionId,
+                ["title"] = label,
+                ["enabled"] = button.IsEnabled
+            });
+        }
+
+        return result;
     }
 
     private static Dictionary<string, object?> BuildCardSelectState(NCardGridSelectionScreen screen, RunState runState)
