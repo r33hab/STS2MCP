@@ -12,6 +12,7 @@ using MegaCrit.Sts2.Core.Nodes.Relics;
 using MegaCrit.Sts2.Core.Nodes.Screens.Overlays;
 using MegaCrit.Sts2.Core.Nodes.Screens.TreasureRoomRelic;
 using MegaCrit.Sts2.Core.Entities.Merchant;
+using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Models.Events;
 using MegaCrit.Sts2.Core.Nodes.Events;
 using MegaCrit.Sts2.Core.Nodes.Events.Custom;
@@ -120,6 +121,22 @@ public static partial class McpMod
     private static Dictionary<string, object?> MissingIntParam(string description, params string[] names)
         => Error($"Missing '{names[0]}' ({description}). Accepted names: {string.Join(", ", names)}");
 
+    /// <summary>Reads a string parameter under any of the given names.</summary>
+    private static string? TryReadStringParam(Dictionary<string, JsonElement> data, params string[] names)
+    {
+        foreach (var name in names)
+        {
+            if (!data.TryGetValue(name, out var elem))
+                continue;
+            if (elem.ValueKind != JsonValueKind.String)
+                continue;
+            var value = elem.GetString();
+            if (!string.IsNullOrWhiteSpace(value))
+                return value.Trim();
+        }
+        return null;
+    }
+
     /// <summary>
     /// Reads the 'target' parameter as a string, accepting a bare JSON number so that
     /// a combat_id can be passed as either 3 or "3". GetString() throws on a number,
@@ -157,17 +174,31 @@ public static partial class McpMod
             return Error("No combat state");
 
         // Get card by index in hand
-        if (!TryGetIntParam(data, out int cardIndex, "card_index", "index"))
-            return MissingIntParam("index of the card in hand", "card_index", "index");
-
         var hand = player.PlayerCombatState?.Hand;
         if (hand == null)
             return Error("No hand available");
 
-        if (cardIndex < 0 || cardIndex >= hand.Cards.Count)
-            return Error($"card_index {cardIndex} out of range (hand has {hand.Cards.Count} cards)");
-
-        var card = hand.Cards[cardIndex];
+        // Prefer the uid: card_index shifts as soon as a card leaves the hand, so a
+        // multi-card plan built from one state read goes wrong after the first play.
+        CardModel card;
+        string? cardUid = TryReadStringParam(data, "card_uid", "uid");
+        if (cardUid != null)
+        {
+            RefreshCardUidRegistry(combatState);
+            card = hand.Cards.FirstOrDefault(c => GetStableCardUid(c) == cardUid)!;
+            if (card == null)
+                return Error(
+                    $"Card '{cardUid}' is not in hand. Hand: "
+                    + string.Join(", ", hand.Cards.Select(GetStableCardUid)));
+        }
+        else
+        {
+            if (!TryGetIntParam(data, out int cardIndex, "card_index", "index"))
+                return Error("Missing card selector. Provide 'card_uid' (preferred, stable across plays) or 'card_index' (position in hand).");
+            if (cardIndex < 0 || cardIndex >= hand.Cards.Count)
+                return Error($"card_index {cardIndex} out of range (hand has {hand.Cards.Count} cards)");
+            card = hand.Cards[cardIndex];
+        }
 
         if (!card.CanPlay(out var reason, out _))
             return Error($"Card '{card.Title}' cannot be played: {reason}");

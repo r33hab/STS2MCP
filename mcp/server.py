@@ -388,17 +388,33 @@ async def proceed_to_map() -> str:
 
 
 @mcp.tool()
-async def combat_play_card(card_index: int, target: str | None = None) -> str:
+async def combat_play_card(
+    card_index: int | None = None,
+    target: str | None = None,
+    card_uid: str | None = None,
+) -> str:
     """[Combat] Play a card from the player's hand.
 
     Args:
         card_index: Index of the card in hand (0-based, as shown in game state).
-        target: Entity ID of the target enemy (e.g. "JAW_WORM_0"). Required for single-target cards.
+        target: Target enemy, as either its entity_id ("JAW_WORM_0") or its
+            combat_id ("3"). Required for single-target cards, except when only
+            one enemy is alive, in which case it is chosen automatically.
+        card_uid: The card's uid from game state (e.g. "STRIKE#2"). Preferred over
+            card_index: it identifies the card instance itself and stays valid for
+            the whole combat, so a multi-card plan does not need recomputing after
+            every play.
 
-    Note that the index can change as cards are played - playing a card will shift the indices of remaining cards in hand.
-    Refer to the latest game state for accurate indices. New cards are drawn to the right, so playing cards from right to left can help maintain more stable indices for remaining cards.
+    card_index is a position in the hand, so playing a card shifts the indices of
+    everything behind it; re-read state between plays if you use it.
     """
-    body: dict = {"action": "play_card", "card_index": card_index}
+    if card_uid is None and card_index is None:
+        return "Error: provide card_uid (preferred) or card_index."
+    body: dict = {"action": "play_card"}
+    if card_uid is not None:
+        body["card_uid"] = card_uid
+    if card_index is not None:
+        body["card_index"] = card_index
     if target is not None:
         body["target"] = target
     try:
