@@ -1143,8 +1143,12 @@ public static partial class McpMod
                 {
                     string? name = keyword.GetValueOrDefault("name")?.ToString();
                     string? desc = keyword.GetValueOrDefault("description")?.ToString();
-                    if (name != null && desc != null)
-                        glossary.TryAdd(name, desc);
+                    if (name == null)
+                        continue;
+                    // A keyword with no text used to be dropped from the glossary
+                    // entirely, so it showed up in a card's keyword list with nothing
+                    // to explain it and no sign that the game itself has no text for it.
+                    glossary.TryAdd(name, desc ?? "(no description in game data)");
                 }
             }
             foreach (var (key, value) in dict)

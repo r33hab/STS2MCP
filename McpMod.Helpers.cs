@@ -239,6 +239,38 @@ public static partial class McpMod
         catch (ObjectDisposedException) { }
     }
 
+    /// <summary>
+    /// Last-resort description for a hover tip whose own text is empty: ask the model
+    /// the tip points at. PowerModel/RelicModel/CardModel each expose their own text
+    /// under a different name, so try them in order of specificity.
+    /// </summary>
+    private static string? DescribeCanonicalModel(IHoverTip tip)
+    {
+        object? model;
+        try { model = tip.CanonicalModel; }
+        catch { return null; }
+        if (model == null) return null;
+
+        foreach (var propertyName in new[] { "SmartDescription", "DynamicDescription", "Description" })
+        {
+            try
+            {
+                var property = model.GetType().GetProperty(propertyName);
+                if (property == null) continue;
+                var value = property.GetValue(model);
+                if (value == null) continue;
+                var raw = value.ToString();
+                if (string.IsNullOrWhiteSpace(raw)) continue;
+                var text = StripRichTextTags(raw);
+                if (!string.IsNullOrWhiteSpace(text))
+                    return text;
+            }
+            catch { /* try the next one */ }
+        }
+
+        return null;
+    }
+
     private static List<Dictionary<string, object?>> BuildHoverTips(IEnumerable<IHoverTip> tips)
     {
         var result = new List<Dictionary<string, object?>>();
@@ -263,16 +295,31 @@ public static partial class McpMod
                         description = SafeGetCardDescription(cardTip.Card);
                     }
 
+                    // Some keywords ship with no description text at all (Sly is one),
+                    // and some describe themselves in terms of themselves. Fall back to
+                    // the canonical model the tip points at, which carries the real
+                    // effect text, before giving up.
+                    if (string.IsNullOrWhiteSpace(description))
+                        description = DescribeCanonicalModel(tip);
+
                     if (title == null && description == null) continue;
 
                     string key = title ?? description!;
                     if (!seen.Add(key)) continue;
 
-                    result.Add(new Dictionary<string, object?>
+                    var entry = new Dictionary<string, object?>
                     {
                         ["name"] = title,
                         ["description"] = description
-                    });
+                    };
+
+                    string? tipId = SafeGetText(() => tip.Id);
+                    if (!string.IsNullOrWhiteSpace(tipId))
+                        entry["id"] = tipId;
+                    if (string.IsNullOrWhiteSpace(description))
+                        entry["description_missing"] = true;
+
+                    result.Add(entry);
                 }
                 catch { /* skip individual tip on error */ }
             }
