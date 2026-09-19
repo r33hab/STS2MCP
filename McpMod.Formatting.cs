@@ -37,10 +37,13 @@ public static partial class McpMod
             return sb.ToString();
         }
 
+        // A "message" is a note about the screen, not a replacement for it. Returning
+        // here dropped every following section, which is why some screens (treasure
+        // among them) rendered as a single line of prose with no contents at all.
         if (state.TryGetValue("message", out var msg) && msg != null)
         {
             sb.AppendLine(msg.ToString());
-            return sb.ToString();
+            sb.AppendLine();
         }
 
         // Multiplayer players summary (top-level)
