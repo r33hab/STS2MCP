@@ -358,14 +358,35 @@ async def use_potion(slot: int, target: str | None = None) -> str:
     Works both during and outside of combat. Combat-only potions require an active battle.
 
     Args:
-        slot: Potion slot index (as shown in game state).
-        target: Entity ID of the target enemy (e.g. "JAW_WORM_0"). Required for enemy-targeted potions.
+        slot: The belt slot from game state `player.potions[].slot` — not a position
+            in the potions list. After using the potion in slot 0, the remaining one
+            is still slot 1.
+        target: Target enemy, as either its entity_id ("JAW_WORM_0") or its combat_id
+            ("3"). Required for enemy-targeted potions unless exactly one enemy is
+            alive, in which case it is chosen automatically.
     """
     body: dict = {"action": "use_potion", "slot": slot}
     if target is not None:
         body["target"] = target
     try:
         return await _post(body)
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def sell_potion(slot: int) -> str:
+    """Sell a potion to the merchant by using it on them.
+
+    Foul Potion's second mode is worth 100 gold. Only valid in a shop or fake
+    merchant, and only for potions that have a merchant interaction — shop state
+    lists those under `sellable_potions`.
+
+    Args:
+        slot: The belt slot from game state `player.potions[].slot`.
+    """
+    try:
+        return await _post({"action": "sell_potion", "slot": slot})
     except Exception as e:
         return _handle_error(e)
 

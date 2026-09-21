@@ -64,6 +64,7 @@ public static partial class McpMod
         {
             "play_card" => ExecutePlayCard(player, data),
             "use_potion" => ExecuteUsePotion(player, data),
+            "sell_potion" => ExecuteSellPotion(player, data),
             "discard_potion" => ExecuteDiscardPotion(player, data),
             "end_turn" => ExecuteEndTurn(player),
             "choose_map_node" => ExecuteChooseMapNode(data),
@@ -296,7 +297,23 @@ public static partial class McpMod
         if (potion.Owner.Creature.IsDead)
             return Error("Cannot use potion - player creature is dead");
         if (!potion.PassesCustomUsabilityCheck)
-            return Error($"Potion '{SafeGetText(() => potion.Title)}' cannot be used right now");
+        {
+            // Some potions are only usable against the merchant (Foul Potion sells for
+            // gold instead of exploding), and the merchant target is only findable while
+            // the inventory panel is closed. Close it and re-check rather than refusing.
+            if (TryCloseMerchantInventory(player) && potion.PassesCustomUsabilityCheck)
+            {
+                // usable now; fall through
+            }
+            else
+            {
+                return Error(
+                    $"Potion '{SafeGetText(() => potion.Title)}' cannot be used right now"
+                    + (IsInMerchantRoom(player)
+                        ? " (in a shop: this potion has no merchant interaction, or the merchant is not available)"
+                        : ""));
+            }
+        }
 
         bool inCombat = CombatManager.Instance.IsInProgress;
         if (potion.Usage == PotionUsage.CombatOnly)
@@ -371,6 +388,130 @@ public static partial class McpMod
             ["status"] = "ok",
             ["message"] = $"Using potion '{SafeGetText(() => potion.Title)}' from slot {slot}{targetMsg}"
         };
+    }
+
+    /// <summary>
+    /// Sells a potion to the merchant by using it on them — the Foul Potion's second
+    /// mode, worth 100 gold each. The API had no way to do this at all: use_potion in a
+    /// shop returned ok and changed nothing, and the shop state exposed no sell action,
+    /// so three Foul Potions over a run were 300 gold silently left on the floor.
+    /// This is use_potion with the shop precondition checked up front.
+    /// </summary>
+    private static Dictionary<string, object?> ExecuteSellPotion(Player player, Dictionary<string, JsonElement> data)
+    {
+        if (!IsInMerchantRoom(player))
+            return Error("Not in a shop - potions can only be sold to a merchant");
+
+        if (!TryGetIntParam(data, out int slot, "slot", "potion_index", "index"))
+            return MissingIntParam("potion slot index", "slot", "potion_index", "index");
+        if (slot < 0 || slot >= player.PotionSlots.Count)
+            return Error($"Potion slot {slot} out of range (player has {player.PotionSlots.Count} slots)");
+
+        var potion = player.GetPotionAtSlotIndex(slot);
+        if (potion == null)
+            return Error(DescribeEmptyPotionSlot(player, slot));
+
+        if (!CanSellPotionToMerchant(player, potion))
+            return Error(
+                $"Potion '{SafeGetText(() => potion.Title)}' cannot be sold to the merchant. "
+                + "Only potions with a merchant interaction (e.g. Foul Potion) can be.");
+
+        return ExecuteUsePotion(player, data);
+    }
+
+    private static bool IsInMerchantRoom(Player player)
+    {
+        try
+        {
+            if (player.RunState.CurrentRoom is MerchantRoom)
+                return true;
+            return player.RunState.CurrentRoom is EventRoom eventRoom
+                   && eventRoom.CanonicalEvent is FakeMerchant;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// True when this potion's usability depends on the merchant being present and it is.
+    /// Determined by asking the potion itself, after making sure the inventory panel is
+    /// closed, so no potion list needs to be hard-coded here.
+    /// </summary>
+    internal static bool CanSellPotionToMerchant(Player player, PotionModel potion)
+    {
+        try
+        {
+            if (!IsInMerchantRoom(player))
+                return false;
+            if (potion.Usage == PotionUsage.CombatOnly || potion.Usage == PotionUsage.Automatic)
+                return false;
+            if (potion.PassesCustomUsabilityCheck)
+                return HasMerchantInteraction(player, potion);
+            TryCloseMerchantInventory(player);
+            return potion.PassesCustomUsabilityCheck && HasMerchantInteraction(player, potion);
+        }
+        catch { return false; }
+    }
+
+    /// <summary>
+    /// Whether the potion advertises a merchant target at all. Potions that do expose a
+    /// static GetFoulPotionMerchantTarget-style lookup; anything without one is an
+    /// ordinary out-of-combat potion, not a sale.
+    /// </summary>
+    private static bool HasMerchantInteraction(Player player, PotionModel potion)
+    {
+        try
+        {
+            var method = potion.GetType().GetMethods(
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+                .FirstOrDefault(m => m.Name.Contains("MerchantTarget", System.StringComparison.Ordinal));
+            if (method == null)
+                return false;
+
+            var result = method.Invoke(null, new object?[] { player.RunState.CurrentRoom });
+            if (result == null)
+                return false;
+
+            var item1 = result.GetType().GetField("Item1")?.GetValue(result);
+            return item1 != null;
+        }
+        catch { return false; }
+    }
+
+    /// <summary>Closes the merchant inventory panel if it is open. Returns true if a shop was found.</summary>
+    private static bool TryCloseMerchantInventory(Player player)
+    {
+        try
+        {
+            if (NMerchantRoom.Instance is { } merchRoom && player.RunState.CurrentRoom is MerchantRoom)
+            {
+                if (merchRoom.Inventory?.IsOpen == true)
+                {
+                    var backBtn = FindFirst<NBackButton>(merchRoom);
+                    if (backBtn is { IsEnabled: true })
+                        backBtn.ForceClick();
+                }
+                return true;
+            }
+
+            if (NEventRoom.Instance is { } evtRoom)
+            {
+                var fmNode = FindFirst<NFakeMerchant>(evtRoom);
+                if (fmNode != null)
+                {
+                    var fmInventory = FindFirst<NMerchantInventory>(fmNode);
+                    if (fmInventory is { IsOpen: true })
+                    {
+                        var backBtn = FindFirst<NBackButton>(fmNode);
+                        if (backBtn is { IsEnabled: true })
+                            backBtn.ForceClick();
+                    }
+                    return true;
+                }
+            }
+        }
+        catch { /* best effort */ }
+
+        return false;
     }
 
     private static Dictionary<string, object?> ExecuteDiscardPotion(Player player, Dictionary<string, JsonElement> data)
