@@ -1107,6 +1107,7 @@ public static partial class McpMod
         {
             "transform" => "Transform",
             "upgrade" => "Upgrade",
+            "enchant" => "Enchant",
             "select" => "Select",
             "simple_select" => "Select",
             _ => screenType
@@ -1117,6 +1118,19 @@ public static partial class McpMod
         {
             sb.AppendLine($"*{promptObj}*");
         }
+
+        // How many are picked out of how many the screen wants. Without this line a caller
+        // on a multi-card screen cannot tell whether confirming will do anything.
+        if (cardSelect.TryGetValue("selected_count", out var selCountObj) && selCountObj is int selCount)
+        {
+            string wanted = "";
+            if (cardSelect.TryGetValue("required_count", out var reqObj) && reqObj is int req)
+                wanted = $" of {req} required";
+            else if (cardSelect.TryGetValue("min_select", out var minObj) && minObj is int min
+                     && cardSelect.TryGetValue("max_select", out var maxObj) && maxObj is int max)
+                wanted = $" ({min}-{max} accepted)";
+            sb.AppendLine($"**Selected: {selCount}{wanted}**");
+        }
         sb.AppendLine();
 
         if (cardSelect.TryGetValue("cards", out var cardsObj) && cardsObj is List<Dictionary<string, object?>> cards)
@@ -1125,7 +1139,8 @@ public static partial class McpMod
             foreach (var card in cards)
             {
                 string starCost = card.TryGetValue("star_cost", out var sc) && sc != null ? $" + {sc} star" : "";
-                sb.AppendLine($"- [{card["index"]}] **{card["name"]}** ({card["cost"]} energy{starCost}) [{card["type"]}] {card["rarity"]} - {card["description"]}");
+                string selected = card.TryGetValue("selected", out var selObj) && selObj is true ? "[x] " : "";
+                sb.AppendLine($"- {selected}[{card["index"]}] **{card["name"]}** ({card["cost"]} energy{starCost}) [{card["type"]}] {card["rarity"]} - {card["description"]}");
                 AppendUpgradePreviewLine(sb, card);
             }
             sb.AppendLine();
