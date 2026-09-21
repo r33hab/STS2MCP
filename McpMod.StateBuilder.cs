@@ -6,6 +6,7 @@ using MegaCrit.Sts2.Core.Combat;
 using MegaCrit.Sts2.Core.Context;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Creatures;
+using MegaCrit.Sts2.Core.Hooks;
 using MegaCrit.Sts2.Core.HoverTips;
 using MegaCrit.Sts2.Core.Entities.Players;
 using MegaCrit.Sts2.Core.Entities.Potions;
@@ -1444,21 +1445,7 @@ public static partial class McpMod
         battle["turn"] = combatState.CurrentSide.ToString().ToLower();
         battle["is_play_phase"] = IsPlayPhase(combatState);
 
-        // Enemies
-        var enemies = new List<Dictionary<string, object?>>();
-        RefreshEntityIdRegistry(combatState);
-        // Enemies can appear twice in the list while the combat state is being rebuilt
-        // (splits and spawns), which printed every line of that enemy twice in markdown.
-        var seenCombatIds = new HashSet<uint>();
-        foreach (var creature in combatState.Enemies)
-        {
-            if (!creature.IsAlive)
-                continue;
-            if (creature.CombatId is uint id && !seenCombatIds.Add(id))
-                continue;
-            enemies.Add(BuildEnemyState(creature));
-        }
-        battle["enemies"] = enemies;
+        battle["enemies"] = BuildEnemyList(combatState);
 
         return battle;
     }
@@ -2067,21 +2054,82 @@ public static partial class McpMod
         return entityId;
     }
 
+    /// <summary>
+    /// Every enemy the fight still contains, alive or waiting to come back.
+    ///
+    /// A killed enemy normally leaves ICombatState.Enemies, so listing the survivors used
+    /// to be the same thing as listing the list. A Decimillipede segment breaks that: its
+    /// ReattachPower answers false to ShouldCreatureBeRemovedFromCombatAfterDeath, so the
+    /// corpse stays in the fight and heals itself back two enemy turns later. Dropping it
+    /// hid the revive entirely - the caller spent those turns hitting the other segments
+    /// without knowing one was about to stand back up.
+    ///
+    /// Alive enemies are reported as before. Dead ones are reported with alive:false only
+    /// when the game itself refuses to remove them; a corpse that is merely still being
+    /// unwound from the list (CreatureCmd defers removal while its monster is mid-move) is
+    /// left out, because it is leaving.
+    /// </summary>
+    private static List<Dictionary<string, object?>> BuildEnemyList(ICombatState combatState)
+    {
+        var enemies = new List<Dictionary<string, object?>>();
+        RefreshEntityIdRegistry(combatState);
+        // Enemies can appear twice in the list while the combat state is being rebuilt
+        // (splits and spawns), which printed every line of that enemy twice in markdown.
+        var seenCombatIds = new HashSet<uint>();
+        foreach (var creature in combatState.Enemies)
+        {
+            if (!creature.IsAlive && !StaysInCombatWhileDead(combatState, creature))
+                continue;
+            if (creature.CombatId is uint id && !seenCombatIds.Add(id))
+                continue;
+            enemies.Add(BuildEnemyState(creature));
+        }
+        return enemies;
+    }
+
+    /// <summary>
+    /// Whether the game is deliberately keeping this dead creature in the fight.
+    ///
+    /// CreatureCmd.KillWithoutCheckingWinCondition removes a dead enemy from
+    /// ICombatState.Enemies only when Hook.ShouldCreatureBeRemovedFromCombatAfterDeath
+    /// agrees, and every power that wants to outlive its owner (ReattachPower,
+    /// DieForYouPower, IllusionPower...) votes no there. Asking the same predicate is
+    /// therefore the game's own answer, and a sharper test than "dead but still listed":
+    /// removal is also deferred for a monster that is mid-move, so the list briefly holds
+    /// corpses that are on their way out.
+    /// </summary>
+    private static bool StaysInCombatWhileDead(ICombatState combatState, Creature creature)
+    {
+        try { return !Hook.ShouldCreatureBeRemovedFromCombatAfterDeath(combatState, creature); }
+        catch (Exception ex) { Warn("enemy.stays_in_combat_while_dead", ex); return false; }
+    }
+
     private static Dictionary<string, object?> BuildEnemyState(Creature creature)
     {
         var monster = creature.Monster;
         string entityId = GetStableEntityId(creature);
+        bool alive = creature.IsAlive;
 
         var state = new Dictionary<string, object?>
         {
             ["entity_id"] = entityId,
             ["combat_id"] = creature.CombatId,
             ["name"] = SafeGetText(() => monster?.Title),
+            // Explicit on every enemy, alive or not: a caller that wants only living
+            // targets can filter on one field instead of inferring death from hp == 0.
+            ["alive"] = alive,
             ["hp"] = creature.CurrentHp,
             ["max_hp"] = creature.MaxHp,
             ["block"] = creature.Block,
             ["status"] = BuildPowersState(creature)
         };
+
+        if (!alive)
+        {
+            var revive = BuildReviveState(creature);
+            if (revive != null)
+                state["revive"] = revive;
+        }
 
         // Intents
         if (monster?.NextMove is MoveState moveState)
@@ -2115,6 +2163,131 @@ public static partial class McpMod
         }
 
         return state;
+    }
+
+    /// <summary>
+    /// What a dead-but-still-present enemy is waiting for, when it is waiting to come back.
+    ///
+    /// The one case in the game today is the Decimillipede: killing a segment runs
+    /// ReattachPower.AfterDeath, which pushes the monster straight into its DEAD_MOVE and
+    /// leaves the corpse in the fight; DEAD_MOVE's follow-up is REATTACH_MOVE, which calls
+    /// ReattachPower.DoReattach and heals the segment back up by the power's Amount (25).
+    /// One move is performed per enemy turn, so the segment is back two enemy turns after
+    /// it fell, and the API said nothing about it.
+    ///
+    /// Returns null for a corpse with no heal move ahead of it (DieForYouPower and friends
+    /// also keep their owner in the fight, but it stays dead) - "revive" present means
+    /// "this is coming back", never merely "this is dead".
+    /// </summary>
+    private static Dictionary<string, object?>? BuildReviveState(Creature creature)
+    {
+        var power = FindPowerKeepingCorpseInCombat(creature);
+
+        // ReattachPower.DoReattach bails out when every other segment is dead too - that
+        // is the kill, and the whole Decimillipede fades out. Saying "back in 2 turns"
+        // while the fight is ending would be exactly backwards, so check the same thing
+        // the power checks: another living holder of the same power.
+        if (power != null && !HasLivingPeerWithPower(creature, power))
+            return null;
+
+        int? turns = TurnsUntilRevive(creature);
+        if (turns == null)
+            return null;
+
+        var revive = new Dictionary<string, object?>
+        {
+            ["in_turns"] = turns
+        };
+
+        if (power != null)
+        {
+            revive["power_id"] = SafeGetText(() => power.Id.Entry);
+            revive["power_name"] = SafeGetText(() => power.Title);
+            // ReattachPower heals by its own Amount, so its stack count is the HP the
+            // segment comes back with. Reported as null rather than guessed for a power
+            // whose amount is not a heal.
+            int? amount = SafeGetInt(() => power.Amount);
+            revive["hp"] = amount > 0 ? amount : null;
+        }
+
+        return revive;
+    }
+
+    /// <summary>
+    /// Whether another living enemy carries the same power - ReattachPower's
+    /// "are all my other segments dead?" test, asked without naming the power.
+    /// </summary>
+    private static bool HasLivingPeerWithPower(Creature creature, PowerModel power)
+    {
+        try
+        {
+            var combatState = creature.CombatState;
+            if (combatState == null)
+                return true;
+
+            foreach (var other in combatState.Enemies)
+            {
+                if (ReferenceEquals(other, creature) || !other.IsAlive)
+                    continue;
+                if (other.HasPower(power.Id))
+                    return true;
+            }
+            return false;
+        }
+        catch (Exception ex) { Warn("enemy.revive.peers", ex); return true; }
+    }
+
+    /// <summary>
+    /// Enemy turns until this dead creature heals itself back up, read off the monster's
+    /// own move state machine: the moves are performed one per enemy turn along the
+    /// MoveState.FollowUpState chain, so the position of the heal move in that chain is
+    /// the answer. 2 while the segment still has to sit through DEAD_MOVE, 1 once
+    /// REATTACH_MOVE is the move it will perform next.
+    ///
+    /// Nothing exposes a countdown directly - ReattachPower's only bookkeeping is a
+    /// private "isReviving" flag on its internal data, with no turn counter at all - so
+    /// the chain is the reading, not a second source that could be cross-checked.
+    /// Null when no heal move is reachable: the walk stops at the first state that is not
+    /// a plain MoveState (a RandomBranchState has not picked its next move yet) and after
+    /// a few steps, so a heal further away than that is reported as unknown rather than
+    /// guessed.
+    /// </summary>
+    private static int? TurnsUntilRevive(Creature creature)
+    {
+        const int maxLookahead = 4;
+        try
+        {
+            MonsterState? state = creature.Monster?.NextMove;
+            for (int turns = 1; turns <= maxLookahead; turns++)
+            {
+                if (state is not MoveState move)
+                    return null;
+                if (move.Intents.Any(intent => intent.IntentType == IntentType.Heal))
+                    return turns;
+                state = move.FollowUpState;
+            }
+        }
+        catch (Exception ex) { Warn("enemy.revive.in_turns", ex); }
+        return null;
+    }
+
+    /// <summary>
+    /// The power that is keeping this corpse in the fight, i.e. the one that answered no
+    /// to ShouldCreatureBeRemovedFromCombatAfterDeath. Null when the creature is being
+    /// held by something other than one of its own powers.
+    /// </summary>
+    private static PowerModel? FindPowerKeepingCorpseInCombat(Creature creature)
+    {
+        foreach (var power in creature.Powers)
+        {
+            try
+            {
+                if (!power.ShouldCreatureBeRemovedFromCombatAfterDeath(creature))
+                    return power;
+            }
+            catch (Exception ex) { Warn("enemy.revive.power", ex); }
+        }
+        return null;
     }
 
     private static Dictionary<string, object?> BuildEventState(EventRoom eventRoom, RunState runState)

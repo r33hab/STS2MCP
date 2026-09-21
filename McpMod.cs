@@ -32,8 +32,13 @@ public static partial class McpMod
     /// where a client that was written against the old shape is now wrong. Adding fields,
     /// actions, parameters or state_types does not bump it, so clients can keep feature-detecting
     /// additions by presence and use this only to notice a breaking change.
+    ///
+    /// 2: battle.enemies is no longer "the living enemies". A corpse the game keeps in the
+    ///    fight (a Decimillipede segment waiting to reattach) is now listed with
+    ///    alive:false, so a client that treated every entry as a target has to filter on
+    ///    the new `alive` field.
     /// </summary>
-    public const int StateSchemaVersion = 1;
+    public const int StateSchemaVersion = 2;
 
     public const int DefaultPort = 15526;
     private const string ConfigFileName = "STS2_MCP.conf";
