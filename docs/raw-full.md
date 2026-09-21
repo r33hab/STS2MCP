@@ -21,9 +21,14 @@ The endpoints are mutually exclusive: calling singleplayer during a multiplayer 
 
 ### Query Parameters
 
-| Parameter | Values             | Default | Description     |
-|-----------|--------------------|---------|-----------------|
-| `format`  | `json`, `markdown` | `json`  | Response format |
+| Parameter | Values                                        | Default | Description                                                     |
+|-----------|-----------------------------------------------|---------|-----------------------------------------------------------------|
+| `format`  | `json`, `markdown`                            | `json`  | Response format                                                 |
+| `pretty`  | `1`, `true`, `yes` (or present with no value) | off     | Indent the JSON. Off by default — compact output is ~32% smaller |
+
+JSON responses are compact by default; `pretty` opts into indentation for that one request. It works on
+every JSON-returning endpoint, on POST as well as GET (e.g. `POST /api/v1/singleplayer?pretty=1`), and on
+error responses. It has no effect on `format=markdown`.
 
 ### Common Top-Level Fields
 

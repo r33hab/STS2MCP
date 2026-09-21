@@ -20,21 +20,23 @@ public static partial class McpMod
         var itemType = request.QueryString["type"] ?? request.QueryString["item_type"] ?? "all";
         var scope = request.QueryString["scope"] ?? "discovered";
         var limit = ParseWikiLimit(request.QueryString["limit"]);
+        bool pretty = WantsPretty(request);
 
         if (string.IsNullOrWhiteSpace(query))
         {
-            SendError(response, 400, "query is required; wiki search does not return the full profile catalog.");
+            SendError(response, 400,
+                "query is required; wiki search does not return the full profile catalog.", pretty);
             return;
         }
 
         try
         {
             var dataTask = RunOnMainThread(() => BuildWikiSearch(query, itemType, limit, scope));
-            SendJson(response, dataTask.GetAwaiter().GetResult());
+            SendJson(response, dataTask.GetAwaiter().GetResult(), pretty);
         }
         catch (Exception ex)
         {
-            SendError(response, 500, $"Failed to search wiki: {ex.Message}");
+            SendError(response, 500, $"Failed to search wiki: {ex.Message}", pretty);
         }
     }
 
