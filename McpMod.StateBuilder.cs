@@ -1237,8 +1237,10 @@ public static partial class McpMod
         // PlayerCombatState can linger after combat while on map/rest/shop. Energy/MaxEnergy getters
         // run hooks (e.g. Hook.ModifyMaxEnergy) that null-ref without a live combat - only serialize
         // combat fields when a fight is actually in progress.
+        bool inCombat = false;
         if (combatState != null && CombatManager.Instance.IsInProgress)
         {
+            inCombat = true;
             state["energy"] = combatState.Energy;
             state["max_energy"] = combatState.MaxEnergy;
 
@@ -1355,7 +1357,43 @@ public static partial class McpMod
         state["potions"] = potions;
         state["max_potion_slots"] = player.MaxPotionCount;
 
+        AddDeckState(state, player, inCombat);
+
         return state;
+    }
+
+    /// <summary>
+    /// The master deck, which every out-of-combat decision is made against: a card reward,
+    /// a smith, a shop removal and a transform event all asked the caller to choose without
+    /// ever showing what it already owns.
+    ///
+    /// Combat clones the deck into the draw pile (Player.PopulateCombatState), so Player.Deck
+    /// stays intact and its count is meaningful on every screen. The card list is only sent
+    /// outside combat: in a fight the hand plus the three piles already enumerate every card,
+    /// and a second full copy would roughly double the payload of the largest state there is.
+    /// </summary>
+    private static void AddDeckState(Dictionary<string, object?> state, Player player, bool inCombat)
+    {
+        // Player.Deck is created with the Player, but a run in character select has not been
+        // through PopulateStartingDeck yet, so an empty deck is a normal state, not an error.
+        var deckCards = player.Deck?.Cards;
+        if (deckCards == null)
+            return;
+
+        state["deck_count"] = deckCards.Count;
+        if (inCombat)
+            return;
+
+        var deck = new List<Dictionary<string, object?>>();
+        int deckIndex = 0;
+        foreach (var card in deckCards)
+        {
+            var cardInfo = BuildCardInfo(card, PileType.Deck);
+            cardInfo["index"] = deckIndex;
+            deck.Add(cardInfo);
+            deckIndex++;
+        }
+        state["deck"] = deck;
     }
 
     private static string GetCostDisplay(CardModel card)

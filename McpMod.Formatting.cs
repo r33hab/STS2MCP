@@ -100,6 +100,7 @@ public static partial class McpMod
                 return $"- **{r["name"]}**{counter}: {r["description"]}";
             });
             FormatPotionsSection(sb, topPlayer);
+            FormatMasterDeckMarkdown(sb, topPlayer);
         }
 
         if (state.TryGetValue("battle", out var battleObj) && battleObj is Dictionary<string, object?> battle)
@@ -473,6 +474,47 @@ public static partial class McpMod
             return $"{label}: {dmg}{hits}{cap}";
         });
         sb.AppendLine($"  - resolved damage: {string.Join(", ", parts)}");
+    }
+
+    /// <summary>
+    /// The master deck, out of combat only (in a fight the piles already list every card).
+    /// Identical copies are collapsed into one line with a count - a 30-card deck is mostly
+    /// Strikes and Defends, and printing each one separately buried the cards that matter.
+    /// Keywords are left off here on purpose: the glossary section already explains every
+    /// keyword that appears anywhere in the state, including these cards.
+    /// </summary>
+    private static void FormatMasterDeckMarkdown(StringBuilder sb, Dictionary<string, object?> player)
+    {
+        if (!player.TryGetValue("deck", out var deckObj)
+            || deckObj is not List<Dictionary<string, object?>> deck)
+            return;
+
+        object? countObj = player.GetValueOrDefault("deck_count") ?? deck.Count;
+        sb.AppendLine($"### Deck ({countObj} cards)");
+
+        // Group key has to include the upgrade state: an upgraded Strike is a different card
+        // to reason about, and merging it with its base version would misreport the deck.
+        var seen = new Dictionary<string, int>();
+        var order = new List<(Dictionary<string, object?> Card, string Key)>();
+        foreach (var card in deck)
+        {
+            string key = $"{card.GetValueOrDefault("id")}|{card.GetValueOrDefault("is_upgraded")}";
+            if (seen.TryGetValue(key, out int count))
+            {
+                seen[key] = count + 1;
+                continue;
+            }
+            seen[key] = 1;
+            order.Add((card, key));
+        }
+
+        foreach (var (card, key) in order)
+        {
+            string starCost = card.TryGetValue("star_cost", out var sc) && sc != null ? $" + {sc} star" : "";
+            string copies = seen[key] > 1 ? $" ×{seen[key]}" : "";
+            sb.AppendLine($"- [{card["index"]}] **{card["name"]}**{copies} ({card["cost"]} energy{starCost}) [{card["type"]}] - {card["description"]}");
+        }
+        sb.AppendLine();
     }
 
     private static void FormatDeckPilesMarkdown(StringBuilder sb, Dictionary<string, object?> player)

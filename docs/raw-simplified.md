@@ -26,6 +26,8 @@ Every JSON response includes:
 - `state_type` — which screen the game is on (see below)
 - `run` — `{ act, floor, ascension }` (absent for `menu`)
 - `player` — full player state: character, HP, gold, relics, potions, `max_potion_slots` (belt capacity, grows with relics), and during combat: energy, hand, piles, orbs (absent for `menu`)
+  - `deck_count` — number of cards in the master deck. Present on every screen, combat included (combat clones the deck into the draw pile, so the deck itself stays intact).
+  - `deck` — the master deck itself, one entry per card: `index` (position in this list), `id`, `name`, `type`, `cost`, `star_cost`, `description`, `rarity`, `is_upgraded`, `keywords`. **Outside combat only** — during a fight the hand plus `draw_pile` / `discard_pile` / `exhaust_pile` already enumerate every card. Empty (and `deck_count` 0) before a run's starting deck is dealt out. Markdown renders it as `### Deck (N cards)` with identical copies collapsed into one `×N` line.
 
 | `state_type` | Screen | Available Actions |
 |---|---|---|
