@@ -190,6 +190,23 @@ public static partial class McpMod
         }, pretty);
     }
 
+    /// <summary>
+    /// 503 for "the game's main thread never picked this up". `retry: true` is the contract:
+    /// the request was not executed, so a client may safely send it again - unlike a 500, where
+    /// the action ran and failed.
+    /// </summary>
+    internal static void SendUnavailable(
+        HttpListenerResponse response, string message, bool pretty = false)
+    {
+        response.StatusCode = 503;
+        SendJson(response, new Dictionary<string, object?>
+        {
+            ["error"] = message,
+            ["status"] = "error",
+            ["retry"] = true
+        }, pretty);
+    }
+
     private static Dictionary<string, object?> Error(string message)
     {
         return new Dictionary<string, object?> { ["status"] = "error", ["error"] = message };

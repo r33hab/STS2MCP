@@ -46,7 +46,10 @@ def _profiles_url() -> str:
 def _get_client() -> httpx.AsyncClient:
     global _http
     if _http is None:
-        _http = httpx.AsyncClient(timeout=httpx.Timeout(10), trust_env=_trust_env)
+        # Must exceed the mod's own 10 s main-thread timeout, otherwise the client gives up at
+        # the same moment the mod is about to answer 503 and the caller never learns that the
+        # request was NOT executed (and is therefore safe to retry).
+        _http = httpx.AsyncClient(timeout=httpx.Timeout(15), trust_env=_trust_env)
     return _http
 
 

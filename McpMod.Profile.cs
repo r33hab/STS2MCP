@@ -20,8 +20,11 @@ public static partial class McpMod
         bool pretty = WantsPretty(request);
         try
         {
-            var dataTask = RunOnMainThread(BuildProfile);
-            SendJson(response, dataTask.GetAwaiter().GetResult(), pretty);
+            SendJson(response, RunOnMainThreadBlocking(BuildProfile), pretty);
+        }
+        catch (MainThreadUnavailableException ex)
+        {
+            SendUnavailable(response, ex.Message, pretty);
         }
         catch (Exception ex)
         {
@@ -34,8 +37,11 @@ public static partial class McpMod
         bool pretty = WantsPretty(request);
         try
         {
-            var dataTask = RunOnMainThread(BuildProfilesSummary);
-            SendJson(response, dataTask.GetAwaiter().GetResult(), pretty);
+            SendJson(response, RunOnMainThreadBlocking(BuildProfilesSummary), pretty);
+        }
+        catch (MainThreadUnavailableException ex)
+        {
+            SendUnavailable(response, ex.Message, pretty);
         }
         catch (Exception ex)
         {
@@ -74,8 +80,11 @@ public static partial class McpMod
 
         try
         {
-            var resultTask = RunOnMainThread(() => ExecuteProfileAction(action, profileId));
-            SendJson(response, EnsureStatus(resultTask.GetAwaiter().GetResult()), pretty);
+            SendJson(response, EnsureStatus(RunOnMainThreadBlocking(() => ExecuteProfileAction(action, profileId))), pretty);
+        }
+        catch (MainThreadUnavailableException ex)
+        {
+            SendUnavailable(response, ex.Message, pretty);
         }
         catch (Exception ex)
         {
