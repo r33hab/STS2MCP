@@ -759,9 +759,15 @@ async def deck_select_card(card_index: int) -> str:
     """[Card Selection] Select or deselect a card in the card selection screen.
 
     Used when the game asks you to choose cards from your deck (transform, upgrade,
-    remove, discard) or pick a card from offered choices (potions, effects).
+    enchant, remove, discard) or pick a card from offered choices (potions, effects).
 
-    For deck selections: toggles card selection. For choose-a-card: picks immediately.
+    For deck selections: toggles card selection - a card that is already selected comes
+    back out. The result reports `selected` and `selected_count`; game state carries
+    `cards[].selected`, `selected_count` and `required_count`, so there is no need to
+    count your own presses. For choose-a-card: picks immediately.
+
+    Once `max_select` cards are selected the screen opens its preview by itself, and
+    further selecting is refused until you confirm or cancel it.
 
     Args:
         card_index: 0-based index of the card (as shown in game state).
@@ -776,9 +782,12 @@ async def deck_select_card(card_index: int) -> str:
 async def deck_confirm_selection() -> str:
     """[Card Selection] Confirm the current card selection.
 
-    After selecting the required number of cards, use this to confirm.
-    If a preview is showing (e.g., transform preview), this confirms the preview.
-    Not needed for choose-a-card screens where picking is immediate.
+    These screens have two steps. With a preview showing, this applies the selection.
+    Without one, it presses the screen's own confirm, which usually just opens the
+    preview - so a screen may need two calls; the message says which step happened.
+
+    Errors instead of silently doing nothing when the count does not match the screen's
+    min/max. Not needed for choose-a-card screens where picking is immediate.
     """
     try:
         return await _post({"action": "confirm_selection"})
@@ -790,7 +799,8 @@ async def deck_confirm_selection() -> str:
 async def deck_cancel_selection() -> str:
     """[Card Selection] Cancel the current card selection.
 
-    If a preview is showing, goes back to the selection grid.
+    If a preview is showing, goes back to the selection grid AND clears the selection -
+    this is the way out of a preview that was opened with the wrong cards.
     For choose-a-card screens, clicks the skip button (if available).
     Otherwise, closes the card selection screen (only if cancellation is allowed).
     """

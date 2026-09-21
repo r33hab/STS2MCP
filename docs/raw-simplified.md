@@ -54,7 +54,7 @@ Every card object carries `is_upgraded`, `is_upgradable`, `upgrade_level` and `m
 | `shop` | Shop (auto-opens inventory) | `shop_purchase`, `sell_potion`, `proceed` |
 | `fake_merchant` | Fake Merchant event (relic-only shop) | `shop_purchase`, `sell_potion`, `proceed` |
 | `treasure` | Treasure room (auto-opens chest) | `claim_treasure_relic`, `proceed` |
-| `card_select` | Deck card selection overlay (transform, upgrade, remove, choose-a-card) | `select_card`, `confirm_selection`, `cancel_selection` |
+| `card_select` | Deck card selection overlay (transform, upgrade, enchant, remove, choose-a-card) | `select_card`, `confirm_selection`, `cancel_selection` |
 | `bundle_select` | Card bundle choice overlay | `select_bundle`, `confirm_bundle_selection`, `cancel_bundle_selection` |
 | `relic_select` | Relic choice overlay (boss relics) | `select_relic`, `skip_relic_selection` |
 | `crystal_sphere` | Crystal Sphere minigame | `crystal_sphere_set_tool`, `crystal_sphere_click_cell`, `crystal_sphere_proceed` |
@@ -277,6 +277,30 @@ Each offered card with an upgrade left carries `upgrade_preview`, so the upgrade
 | `cancel_selection` | _(none)_ | Cancel preview, skip (choose-a-card), or close screen. |
 
 On the upgrade screen (`screen_type: "upgrade"`), each card with an upgrade left carries `upgrade_preview` (its upgraded form). The transform/remove screens do not.
+
+**Selection state.** Every grid screen reports what it currently holds selected, so a caller never has to
+count its own presses:
+
+| Field | Meaning |
+|---|---|
+| `cards[].selected` | Whether that card is in the screen's selection. Stays `true` while a preview is open, where the game drops the grid highlight but keeps the card. |
+| `selected_count` | How many cards the screen has selected. |
+| `required_count` | The `N` of a "select N cards" prompt, or `null` when the screen accepts a range. |
+| `min_select` / `max_select` | The two ends of that range (equal when `required_count` is set). |
+| `selected_outside_grid` | Only present when the grid is scrolled and a selected card is outside the `cards[]` window. |
+
+**These screens have two steps.** Picking cards comes first; then a preview panel opens - by itself once
+`max_select` is reached, or when `confirm_selection` presses the screen's own confirm - and only the preview's
+own confirm applies the selection. `confirm_selection` says which of the two it did
+(`"Selection preview opened … call confirm_selection again to apply it"` vs `"Confirming selection…"`), and
+`preview_showing` says where the screen stands.
+
+While a preview is open the game takes the grid out of the input path, so `select_card` returns `status: error`
+rather than pressing through it (pressing through appends duplicate cards to the preview row).
+`cancel_selection` closes the preview **and clears the selection**, putting you back on an empty grid.
+
+`confirm_selection` returns `status: error` - instead of an `ok` that does nothing - when the selection is
+short of `min_select`, over `max_select`, or when the press was swallowed by the screen.
 
 ### Bundle Selection Overlay (`bundle_select`)
 

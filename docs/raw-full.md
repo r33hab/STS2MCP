@@ -723,13 +723,13 @@ Chest is auto-opened on first state query.
 
 ### `card_select` — Card Selection Overlay
 
-Covers deck transforms, upgrades, removals, and choose-a-card effects. Appears on top of any room.
+Covers deck transforms, upgrades, enchants, removals, and choose-a-card effects. Appears on top of any room.
 
 ```jsonc
 {
   "state_type": "card_select",
   "card_select": {
-    "screen_type": "transform",  // transform, upgrade, select, simple_select, choose
+    "screen_type": "transform",  // transform, upgrade, enchant, select, simple_select, choose
     "prompt": "Choose 2 cards to Transform.",
     "cards": [
       {
@@ -742,12 +742,20 @@ Covers deck transforms, upgrades, removals, and choose-a-card effects. Appears o
         "description": "Deal 6 damage.",
         "rarity": "Common",
         "is_upgraded": false,
+        "selected": false,       // in the screen's own selection set (grid screens only)
         "keywords": [ /* Keyword Objects */ ]
       }
     ],
-    "preview_showing": false,    // true when selection is complete and preview is displayed
+    "selected_count": 0,         // how many cards the screen currently holds selected
+    "required_count": 2,         // the N of a "choose N" prompt; null when a range is accepted
+    "min_select": 2,             // the two ends of that range (equal when required_count is set)
+    "max_select": 2,
+    "preview_showing": false,    // true when the preview panel is up (step two, see below)
     "can_confirm": false,        // true when confirm button is available
     "can_cancel": true           // true when close/cancel button is available
+
+    // "selected_outside_grid": only present when the grid is scrolled and a selected card
+    // falls outside the window listed in "cards".
 
     // For "choose" type: picking is immediate (no confirm needed).
     // can_skip indicates if a skip button exists.
@@ -756,6 +764,11 @@ Covers deck transforms, upgrades, removals, and choose-a-card effects. Appears o
   "player": { ... }
 }
 ```
+
+**Grid screens have two steps.** Cards are picked first; then a preview panel opens — by itself once
+`max_select` is reached, or when `confirm_selection` presses the screen's own confirm — and only the
+preview's own confirm applies the selection. `selected` comes from the screen's selection set, not from the
+grid highlight, so it stays `true` during the preview (the game drops the highlight there but keeps the card).
 
 ### `bundle_select` — Card Bundle Selection Overlay
 
@@ -1410,8 +1423,18 @@ Select a card in a card selection overlay.
 | `index` | int | Yes | 0-based card index in the grid |
 
 **Behavior varies by screen type:**
-- Grid screens (transform, upgrade, select): toggles selection. When enough cards are selected, a preview may appear.
+- Grid screens (transform, upgrade, enchant, select): toggles selection through the game's own
+  `OnCardClicked`, so a card that is already selected comes back out. Once `max_select` cards are selected,
+  the screen opens its preview by itself.
 - Choose-a-card screens (potions, effects): picks the card immediately.
+
+On grid screens the result carries the outcome read back from the screen: `selected` (true when the card is
+now in the selection), `selected_count`, `min_select` / `max_select`, and `preview_showing` when the press
+opened the preview.
+
+Returns `status: error` when the press would not land: while a preview is open (use `confirm_selection` or
+`cancel_selection` — pressing through it corrupts the preview row), and when the screen refuses the press
+because its selection is already full.
 
 ### `confirm_selection`
 
@@ -1421,7 +1444,14 @@ Confirm card selection (grid screens only).
 { "action": "confirm_selection" }
 ```
 
-Checks preview containers first, then main confirm button. Not needed for choose-a-card screens.
+With a preview open, presses the preview's own confirm, which applies the selection. Otherwise presses the
+screen's confirm, which on most of these screens **opens the preview** rather than applying anything — the
+message says which of the two happened, so a two-step screen needs two calls. Not needed for choose-a-card
+screens.
+
+Returns `status: error` rather than an `ok` that does nothing when fewer than `min_select` or more than
+`max_select` cards are selected, when no confirm button is enabled, or when the press was swallowed (the
+screen is still open and no preview appeared).
 
 ### `cancel_selection`
 
@@ -1432,7 +1462,8 @@ Cancel or close the card selection overlay.
 ```
 
 **Behavior:**
-- If a preview is showing: cancels back to the selection grid.
+- If a preview is showing: cancels back to the selection grid. This also **clears the selection** — the game's
+  own cancel empties the set, so the grid comes back with nothing selected.
 - For choose-a-card screens: clicks the skip button (if available).
 - Otherwise: closes the selection screen (if cancellation is allowed).
 

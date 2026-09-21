@@ -5,11 +5,13 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using Godot;
+using MegaCrit.Sts2.Core.CardSelection;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.HoverTips;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
 using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
+using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
 using MegaCrit.Sts2.Core.Nodes.Screens.Map;
 
 namespace STS2_MCP;
@@ -272,6 +274,119 @@ public static partial class McpMod
             }
         }
         catch (Exception ex) { Warn($"options.{label}", ex); }
+    }
+
+    // ---- Grid card selection (NCardGridSelectionScreen and its subclasses) -------------
+    //
+    // Every subclass follows the same two-step shape: click cards in the grid, then a
+    // *preview* panel opens and its own Confirm applies the selection. The screens do not
+    // share a base member for any of it - each declares its own `_selectedCards` /
+    // `_prefs` fields and names its preview container differently in the scene - so the
+    // helpers below are the one place that knows all the spellings.
+    //
+    // Getting the preview container wrong is what A-7 was: the enchant screen's containers
+    // were missing from the list, so `confirm_selection` fell through to the screen's main
+    // Confirm, which on these screens means "open the preview" (PreviewSelection), not
+    // "apply". Pressing it while the preview was already open re-ran PreviewSelection and
+    // appended a second copy of every selected card to the preview row.
+
+    /// <summary>
+    /// Preview container node names across the NCardGridSelectionScreen subclasses:
+    /// upgrade uses %Upgrade*PreviewContainer, enchant %Enchant*PreviewContainer, and
+    /// remove/transform the generic %PreviewContainer. Only one is ever visible.
+    /// </summary>
+    private static readonly string[] CardSelectPreviewContainerNames =
+    {
+        "%UpgradeSinglePreviewContainer",
+        "%UpgradeMultiPreviewContainer",
+        "%EnchantSinglePreviewContainer",
+        "%EnchantMultiPreviewContainer",
+        "%PreviewContainer",
+    };
+
+    /// <summary>The preview panel currently covering the grid, or null when the screen is
+    /// still in its card-picking step.</summary>
+    internal static Control? FindVisibleCardSelectPreview(NCardGridSelectionScreen screen)
+    {
+        foreach (var name in CardSelectPreviewContainerNames)
+        {
+            try
+            {
+                var container = screen.GetNodeOrNull<Control>(name);
+                if (container?.Visible == true)
+                    return container;
+            }
+            catch (ObjectDisposedException) { }
+        }
+        return null;
+    }
+
+    /// <summary>Every visible preview container, for the state's preview card list.</summary>
+    internal static List<Control> FindCardSelectPreviewContainers(NCardGridSelectionScreen screen)
+    {
+        var found = new List<Control>();
+        foreach (var name in CardSelectPreviewContainerNames)
+        {
+            try
+            {
+                var container = screen.GetNodeOrNull<Control>(name);
+                if (container?.Visible == true)
+                    found.Add(container);
+            }
+            catch (ObjectDisposedException) { }
+        }
+        return found;
+    }
+
+    /// <summary>The button that applies a previewed selection. Named "Confirm" in the
+    /// upgrade/enchant/transform scenes and "%PreviewConfirm" in the remove scene.</summary>
+    internal static NConfirmButton? GetCardSelectPreviewConfirm(Control container)
+        => container.GetNodeOrNull<NConfirmButton>("Confirm")
+           ?? container.GetNodeOrNull<NConfirmButton>("%PreviewConfirm");
+
+    /// <summary>The button that drops a previewed selection and returns to the grid.</summary>
+    internal static NBackButton? GetCardSelectPreviewCancel(Control container)
+        => container.GetNodeOrNull<NBackButton>("Cancel")
+           ?? container.GetNodeOrNull<NBackButton>("%PreviewCancel");
+
+    /// <summary>The screen's own Confirm, below the grid. On most of these screens it
+    /// opens the preview rather than applying anything.</summary>
+    internal static NConfirmButton? GetCardSelectMainConfirm(NCardGridSelectionScreen screen)
+        => screen.GetNodeOrNull<NConfirmButton>("Confirm")
+           ?? screen.GetNodeOrNull<NConfirmButton>("%Confirm");
+
+    /// <summary>
+    /// The cards the screen currently has selected. Every subclass keeps them in its own
+    /// private `_selectedCards` HashSet - the same set OnCardClicked toggles - so this is
+    /// the game's own answer, not a guess reconstructed from highlights.
+    /// Null means the field could not be read (a renamed field in a future game build).
+    /// </summary>
+    internal static HashSet<CardModel>? GetCardSelectSelection(NCardGridSelectionScreen screen)
+    {
+        try
+        {
+            return GetInstanceFieldValue(screen, "_selectedCards") as HashSet<CardModel>;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// How many cards the screen wants: `_prefs` carries MinSelect/MaxSelect, which is what
+    /// the game itself checks before it will complete the selection.
+    /// </summary>
+    internal static CardSelectorPrefs? GetCardSelectPrefs(NCardGridSelectionScreen screen)
+    {
+        try
+        {
+            return GetInstanceFieldValue(screen, "_prefs") as CardSelectorPrefs?;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     internal static List<T> FindAll<T>(Node start) where T : Node

@@ -1061,19 +1061,86 @@ public static partial class McpMod
             if (grid == null)
                 return Error("Card grid not found in selection screen");
 
+            // While a preview covers the grid the game takes the grid out of the input path
+            // (FocusBehaviorRecursive = Disabled, scrolling off). Firing HolderPressed anyway
+            // still mutates the selection behind the panel, and re-reaching MaxSelect re-runs
+            // PreviewSelection, which appends another copy of every selected card to the
+            // preview row - the "select_card adds instead of toggling" symptom of A-7.
+            if (FindVisibleCardSelectPreview(gridScreen) != null)
+                return Error("A selection preview is open - use confirm_selection to apply it, or cancel_selection to go back to the grid");
+
             var holders = FindAllSortedByPosition<NGridCardHolder>(gridScreen);
             if (index < 0 || index >= holders.Count)
                 return Error($"Card index {index} out of range ({holders.Count} cards available)");
 
             var holder = holders[index];
-            string cardName = SafeGetText(() => holder.CardModel?.Title) ?? "unknown";
+            var cardModel = holder.CardModel;
+            string cardName = SafeGetText(() => cardModel?.Title) ?? "unknown";
+
+            // The screen's own selection set, so the outcome is read back from the game
+            // instead of assumed.
+            var selection = GetCardSelectSelection(gridScreen);
+            bool? wasSelected = (selection != null && cardModel != null) ? selection.Contains(cardModel) : null;
+
+            // The game's own toggle path: NGridCardHolder.Pressed -> NCardGrid.OnHolderPressed
+            // -> HolderPressed -> the screen's OnCardClicked(card), which adds the card or,
+            // when it is already in the set, removes it and unhighlights it.
             grid.EmitSignal(NCardGrid.SignalName.HolderPressed, holder);
 
-            return new Dictionary<string, object?>
+            // The screen can complete and close on the press itself (NSimpleCardSelectScreen
+            // with RequireManualConfirmation off), leaving nothing to read back.
+            if (!IsCardSelectScreenStillOpen(gridScreen))
+            {
+                return new Dictionary<string, object?>
+                {
+                    ["status"] = "ok",
+                    ["message"] = $"Selected {cardName} - selection complete, screen closed"
+                };
+            }
+
+            if (selection == null || cardModel == null)
+            {
+                return new Dictionary<string, object?>
+                {
+                    ["status"] = "ok",
+                    ["message"] = $"Toggling card selection: {cardName}"
+                };
+            }
+
+            bool isSelected = selection.Contains(cardModel);
+            if (wasSelected == isSelected)
+            {
+                // The one screen that ignores a press is NSimpleCardSelectScreen once the set
+                // is full; report that instead of a success for a no-op.
+                var limit = GetCardSelectPrefs(gridScreen);
+                return Error(isSelected
+                    ? $"{cardName} is still selected - the screen did not accept the press"
+                    : limit.HasValue
+                        ? $"{cardName} was not selected - at most {limit.Value.MaxSelect} card(s) can be selected, deselect one first"
+                        : $"{cardName} was not selected - the screen did not accept the press");
+            }
+
+            var toggled = new Dictionary<string, object?>
             {
                 ["status"] = "ok",
-                ["message"] = $"Toggling card selection: {cardName}"
+                ["message"] = $"{(isSelected ? "Selected" : "Deselected")} {cardName}",
+                ["selected"] = isSelected,
+                ["selected_count"] = selection.Count
             };
+
+            var prefs = GetCardSelectPrefs(gridScreen);
+            if (prefs.HasValue)
+            {
+                toggled["min_select"] = prefs.Value.MinSelect;
+                toggled["max_select"] = prefs.Value.MaxSelect;
+            }
+
+            // Reaching MaxSelect opens the preview by itself on these screens; the caller
+            // needs to know the next action is confirm/cancel, not another select_card.
+            if (FindVisibleCardSelectPreview(gridScreen) != null)
+                toggled["preview_showing"] = true;
+
+            return toggled;
         }
         else if (overlay is NChooseACardSelectionScreen chooseScreen)
         {
@@ -1095,6 +1162,14 @@ public static partial class McpMod
         return Error("No card selection screen is open");
     }
 
+    /// <summary>
+    /// Whether a selection screen is still the screen being driven. The screens take
+    /// themselves off the overlay stack (NOverlayStack.Remove) the moment they complete,
+    /// so this going false is the proof that a confirm press actually landed.
+    /// </summary>
+    private static bool IsCardSelectScreenStillOpen(NCardGridSelectionScreen screen)
+        => IsLiveNode(screen) && ReferenceEquals(NOverlayStack.Instance?.Peek(), screen);
+
     private static Dictionary<string, object?> ExecuteConfirmSelection()
     {
         var overlay = NOverlayStack.Instance?.Peek();
@@ -1103,33 +1178,73 @@ public static partial class McpMod
         if (overlay is not NCardGridSelectionScreen screen)
             return Error("No card selection screen is open");
 
-        // Check all preview containers (upgrade uses UpgradeSinglePreviewContainer / UpgradeMultiPreviewContainer,
-        // NDeckCardSelectScreen uses PreviewContainer with %PreviewConfirm)
-        foreach (var containerName in new[] { "%UpgradeSinglePreviewContainer", "%UpgradeMultiPreviewContainer", "%PreviewContainer" })
+        // The count the screen itself holds, and the min/max it will accept. The game's
+        // completion check is `count >= MinSelect && count <= MaxSelect`; when it fails the
+        // click is simply swallowed, which is how confirm_selection used to return ok and
+        // do nothing (A-7).
+        var selection = GetCardSelectSelection(screen);
+        var prefs = GetCardSelectPrefs(screen);
+        int? selectedCount = selection?.Count;
+
+        // Step two of the screen: a preview panel is up, and its own Confirm is the button
+        // that actually applies the selection. This has to be checked first - the screen's
+        // main Confirm is still enabled underneath, and on these screens pressing it means
+        // "open the preview", which appends a second copy of every selected card (A-7).
+        var preview = FindVisibleCardSelectPreview(screen);
+        if (preview != null)
         {
-            var container = screen.GetNodeOrNull<Godot.Control>(containerName);
-            if (container?.Visible == true)
+            var previewConfirm = GetCardSelectPreviewConfirm(preview);
+            if (previewConfirm is not { IsEnabled: true })
+                return Error("The selection preview's confirm button is not enabled - use cancel_selection to go back to the grid");
+
+            previewConfirm.ForceClick();
+            if (IsCardSelectScreenStillOpen(screen))
             {
-                var confirm = container.GetNodeOrNull<NConfirmButton>("Confirm")
-                              ?? container.GetNodeOrNull<NConfirmButton>("%PreviewConfirm");
-                if (confirm is { IsEnabled: true })
-                {
-                    confirm.ForceClick();
-                    return new Dictionary<string, object?>
-                    {
-                        ["status"] = "ok",
-                        ["message"] = "Confirming selection from preview"
-                    };
-                }
+                return Error(selectedCount is 0
+                    ? "The preview is empty - cancel_selection to go back to the grid and select at least one card"
+                    : "The preview's confirm did nothing - the screen would not accept the current selection");
             }
+
+            return new Dictionary<string, object?>
+            {
+                ["status"] = "ok",
+                ["message"] = "Confirming selection from preview"
+            };
         }
 
-        // Try main confirm button
-        var mainConfirm = screen.GetNodeOrNull<NConfirmButton>("Confirm")
-                          ?? screen.GetNodeOrNull<NConfirmButton>("%Confirm");
-        if (mainConfirm is { IsEnabled: true })
+        // Step one: check the count before pressing anything.
+        if (selectedCount.HasValue && prefs.HasValue)
         {
-            mainConfirm.ForceClick();
+            int min = prefs.Value.MinSelect;
+            int max = prefs.Value.MaxSelect;
+            if (selectedCount.Value < min)
+                return Error($"{selectedCount.Value} of {min} required card(s) selected - select {min - selectedCount.Value} more before confirming");
+            if (selectedCount.Value > max)
+                return Error($"{selectedCount.Value} cards selected but at most {max} can be confirmed - deselect {selectedCount.Value - max}");
+        }
+
+        // The screen's own Confirm. On the remove/upgrade/enchant/transform screens this
+        // opens the preview; only NSimpleCardSelectScreen completes straight from here.
+        var mainConfirm = GetCardSelectMainConfirm(screen);
+
+        // Fallback: any enabled, visible NConfirmButton in the screen tree, for a subclass
+        // that names its confirm button something else.
+        if (mainConfirm is not { IsEnabled: true })
+            mainConfirm = FindAll<NConfirmButton>(screen).FirstOrDefault(b => b.IsEnabled && b.IsVisibleInTree());
+
+        if (mainConfirm is not { IsEnabled: true })
+        {
+            return Error(selectedCount.HasValue && prefs.HasValue
+                ? $"No confirm button is currently enabled ({selectedCount.Value} selected, {prefs.Value.MinSelect}-{prefs.Value.MaxSelect} accepted)"
+                : "No confirm button is currently enabled - select more cards first");
+        }
+
+        mainConfirm.ForceClick();
+
+        // The screen takes itself off the overlay stack the moment it completes, so a stack
+        // that no longer has it on top is the proof that the press landed.
+        if (!IsCardSelectScreenStillOpen(screen))
+        {
             return new Dictionary<string, object?>
             {
                 ["status"] = "ok",
@@ -1137,24 +1252,26 @@ public static partial class McpMod
             };
         }
 
-        // Fallback: find ANY enabled NConfirmButton in the screen tree.
-        // Covers NCardGridSelectionScreen subclasses (like NDeckEnchantSelectScreen)
-        // whose confirm button isn't in any of the known container paths above.
-        var allConfirmButtons = FindAll<NConfirmButton>(screen);
-        foreach (var btn in allConfirmButtons)
+        // Say which of the two steps just happened rather than reporting "confirmed" for a
+        // press that only opened the preview.
+        if (FindVisibleCardSelectPreview(screen) != null)
         {
-            if (btn.IsEnabled && btn.IsVisibleInTree())
+            return new Dictionary<string, object?>
             {
-                btn.ForceClick();
-                return new Dictionary<string, object?>
-                {
-                    ["status"] = "ok",
-                    ["message"] = "Confirming selection"
-                };
-            }
+                ["status"] = "ok",
+                ["message"] = selectedCount.HasValue
+                    ? $"Selection preview opened ({selectedCount.Value} card(s)) - call confirm_selection again to apply it"
+                    : "Selection preview opened - call confirm_selection again to apply it",
+                ["preview_showing"] = true
+            };
         }
 
-        return Error("No confirm button is currently enabled - select more cards first");
+        // Still on the grid, no preview: the game swallowed the press. The enchant and
+        // remove screens do that with an empty selection (their confirm handlers bail on
+        // Count == 0), which is the "ok that did nothing" of A-7.
+        return Error(selectedCount is 0
+            ? "No card is selected - select at least one card, or use cancel_selection to leave the screen"
+            : "The confirm press did nothing - the screen would not accept the current selection");
     }
 
     private static Dictionary<string, object?> ExecuteCancelSelection()
@@ -1180,23 +1297,21 @@ public static partial class McpMod
         if (overlay is not NCardGridSelectionScreen screen)
             return Error("No card selection screen is open");
 
-        // If preview is showing, cancel back to selection
-        foreach (var containerName in new[] { "%UpgradeSinglePreviewContainer", "%UpgradeMultiPreviewContainer", "%PreviewContainer" })
+        // If a preview is showing, cancel back to the grid. This also clears the screen's
+        // selection and empties the preview row, which is the only way out of a preview
+        // that was opened with the wrong cards.
+        var preview = FindVisibleCardSelectPreview(screen);
+        if (preview != null)
         {
-            var container = screen.GetNodeOrNull<Godot.Control>(containerName);
-            if (container?.Visible == true)
+            var cancelBtn = GetCardSelectPreviewCancel(preview);
+            if (cancelBtn is { IsEnabled: true })
             {
-                var cancelBtn = container.GetNodeOrNull<NBackButton>("Cancel")
-                                ?? container.GetNodeOrNull<NBackButton>("%PreviewCancel");
-                if (cancelBtn is { IsEnabled: true })
+                cancelBtn.ForceClick();
+                return new Dictionary<string, object?>
                 {
-                    cancelBtn.ForceClick();
-                    return new Dictionary<string, object?>
-                    {
-                        ["status"] = "ok",
-                        ["message"] = "Cancelling preview - returning to card selection"
-                    };
-                }
+                    ["status"] = "ok",
+                    ["message"] = "Cancelling preview - returning to card selection (selection cleared)"
+                };
             }
         }
 

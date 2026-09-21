@@ -2895,6 +2895,7 @@ public static partial class McpMod
         {
             NDeckTransformSelectScreen => "transform",
             NDeckUpgradeSelectScreen => "upgrade",
+            NDeckEnchantSelectScreen => "enchant",
             NDeckCardSelectScreen => "select",
             NSimpleCardSelectScreen => "simple_select",
             _ => screen.GetType().Name
@@ -2910,10 +2911,19 @@ public static partial class McpMod
             state["prompt"] = prompt;
         }
 
+        // Which cards the screen has selected right now. Read from the screen's own
+        // `_selectedCards` set - the one OnCardClicked toggles - so `selected` cannot drift
+        // from what the game will act on. Without it a caller driving a multi-card screen
+        // (the enchant screens) is blind to its own selection (A-7).
+        var selection = GetCardSelectSelection(screen);
+        if (selection == null)
+            Warn("card_select.selected", "screen has no readable _selectedCards field");
+
         // Cards in the grid (sorted by visual position - MoveToFront can reorder children)
         var cardHolders = FindAllSortedByPosition<NGridCardHolder>(screen);
         var cards = new List<Dictionary<string, object?>>();
         int index = 0;
+        int selectedInGrid = 0;
         foreach (var holder in cardHolders)
         {
             var card = holder.CardModel;
@@ -2921,6 +2931,12 @@ public static partial class McpMod
 
             var cardInfo = BuildCardInfo(card);
             cardInfo["index"] = index;
+            if (selection != null)
+            {
+                bool isSelected = selection.Contains(card);
+                cardInfo["selected"] = isSelected;
+                if (isSelected) selectedInGrid++;
+            }
             // Only on the upgrade screen: the transform/remove screens do not upgrade
             // anything, and every card carrying a preview would bloat the payload.
             if (screen is NDeckUpgradeSelectScreen) AttachUpgradePreview(cardInfo, card);
@@ -2929,21 +2945,43 @@ public static partial class McpMod
         }
         state["cards"] = cards;
 
+        // How many are selected and how many the screen wants. `selected_count` is the
+        // screen's own count (it can exceed what the visible grid window shows);
+        // `required_count` is the "select N" of the prompt, null when the screen accepts a
+        // range ("up to N"), where min_select/max_select give the two ends.
+        if (selection != null)
+            state["selected_count"] = selection.Count;
+        var prefs = GetCardSelectPrefs(screen);
+        if (prefs.HasValue)
+        {
+            int min = prefs.Value.MinSelect;
+            int max = prefs.Value.MaxSelect;
+            state["min_select"] = min;
+            state["max_select"] = max;
+            state["required_count"] = min == max ? min : (int?)null;
+        }
+        else
+        {
+            state["required_count"] = null;
+        }
+        if (selection != null && selection.Count != selectedInGrid)
+        {
+            // Only possible when the grid is scrolled: its holders are a sliding window
+            // over the deck, so a selected card can be outside `cards[]`.
+            state["selected_outside_grid"] = selection.Count - selectedInGrid;
+        }
+
         // Preview container showing? (selection complete, awaiting confirm)
-        // Upgrade screens use UpgradeSinglePreviewContainer / UpgradeMultiPreviewContainer
-        var previewSingle = screen.GetNodeOrNull<Godot.Control>("%UpgradeSinglePreviewContainer");
-        var previewMulti = screen.GetNodeOrNull<Godot.Control>("%UpgradeMultiPreviewContainer");
-        var previewGeneric = screen.GetNodeOrNull<Godot.Control>("%PreviewContainer");
-        bool previewShowing = (previewSingle?.Visible ?? false)
-                            || (previewMulti?.Visible ?? false)
-                            || (previewGeneric?.Visible ?? false);
+        // The subclasses each name theirs differently; FindCardSelectPreviewContainers
+        // knows all the spellings (upgrade, enchant and the generic one).
+        var previewContainers = FindCardSelectPreviewContainers(screen);
+        bool previewShowing = previewContainers.Count > 0;
         state["preview_showing"] = previewShowing;
         if (previewShowing)
         {
             var previewCards = new List<Dictionary<string, object?>>();
-            AddPreviewCardsFromContainer(previewSingle, previewCards);
-            AddPreviewCardsFromContainer(previewMulti, previewCards);
-            AddPreviewCardsFromContainer(previewGeneric, previewCards);
+            foreach (var container in previewContainers)
+                AddPreviewCardsFromContainer(container, previewCards);
             state["preview_cards"] = previewCards;
         }
 
@@ -2951,17 +2989,10 @@ public static partial class McpMod
         // preview container's Cancel / PreviewCancel button (same path as
         // the action handler), not the top-level %Close button.
         bool canCancel = false;
-        if (previewShowing)
+        foreach (var container in previewContainers)
         {
-            foreach (var container in new[] { previewSingle, previewMulti, previewGeneric })
-            {
-                if (container?.Visible == true)
-                {
-                    var cancelBtn = container.GetNodeOrNull<NBackButton>("Cancel")
-                                    ?? container.GetNodeOrNull<NBackButton>("%PreviewCancel");
-                    if (cancelBtn?.IsEnabled == true) { canCancel = true; break; }
-                }
-            }
+            var cancelBtn = GetCardSelectPreviewCancel(container);
+            if (cancelBtn?.IsEnabled == true) { canCancel = true; break; }
         }
         if (!canCancel)
         {
@@ -2970,28 +3001,23 @@ public static partial class McpMod
         }
         state["can_cancel"] = canCancel;
 
-        // Confirm button - search all preview containers and main screen
+        // Confirm button - the preview's own confirm while one is open, otherwise the
+        // screen's. Note that below a grid, "confirm" usually opens the preview rather
+        // than applying the selection; confirm_selection reports which of the two it did.
         bool canConfirm = false;
-        foreach (var container in new[] { previewSingle, previewMulti, previewGeneric })
+        foreach (var container in previewContainers)
         {
-            if (container?.Visible == true)
-            {
-                var confirm = container.GetNodeOrNull<NConfirmButton>("Confirm")
-                              ?? container.GetNodeOrNull<NConfirmButton>("%PreviewConfirm");
-                if (confirm?.IsEnabled == true) { canConfirm = true; break; }
-            }
+            var confirm = GetCardSelectPreviewConfirm(container);
+            if (confirm?.IsEnabled == true) { canConfirm = true; break; }
         }
-        if (!canConfirm)
+        if (!canConfirm && !previewShowing)
         {
-            var mainConfirm = screen.GetNodeOrNull<NConfirmButton>("Confirm")
-                              ?? screen.GetNodeOrNull<NConfirmButton>("%Confirm");
+            var mainConfirm = GetCardSelectMainConfirm(screen);
             if (mainConfirm?.IsEnabled == true) canConfirm = true;
-        }
-        // Fallback: search entire screen tree for any enabled confirm button
-        // (covers subclasses like NDeckEnchantSelectScreen)
-        if (!canConfirm)
-        {
-            canConfirm = FindAll<NConfirmButton>(screen).Any(b => b.IsEnabled && b.IsVisibleInTree());
+            // Fallback: search the screen tree for any enabled confirm button, for a
+            // subclass that names its confirm button something else.
+            if (!canConfirm)
+                canConfirm = FindAll<NConfirmButton>(screen).Any(b => b.IsEnabled && b.IsVisibleInTree());
         }
         state["can_confirm"] = canConfirm;
 
