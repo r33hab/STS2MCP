@@ -438,8 +438,15 @@ public static partial class McpMod
             {
                 string combatIdTag = enemy.TryGetValue("combat_id", out var cid) && cid != null
                     ? $" / combat_id `{cid}`" : "";
-                sb.AppendLine($"### {enemy["name"]} (`{enemy["entity_id"]}`{combatIdTag})");
+                // A dead enemy is only listed at all when the game is keeping it in the
+                // fight, so it has to be unmistakable in the heading: it cannot be
+                // targeted, and it may be about to stand back up.
+                bool alive = enemy.GetValueOrDefault("alive") is not bool a || a;
+                string deadTag = alive ? "" : " — DEAD";
+                sb.AppendLine($"### {enemy["name"]} (`{enemy["entity_id"]}`{combatIdTag}){deadTag}");
                 sb.AppendLine($"HP: {enemy["hp"]}/{enemy["max_hp"]} | Block: {enemy["block"]}");
+                if (!alive)
+                    sb.AppendLine(FormatReviveLine(enemy));
 
                 if (enemy.TryGetValue("intents", out var intentsObj) && intentsObj is List<Dictionary<string, object?>> intents && intents.Count > 0)
                 {
@@ -458,6 +465,25 @@ public static partial class McpMod
                 sb.AppendLine();
             }
         }
+    }
+
+    /// <summary>
+    /// The one line that says whether a corpse is staying down. "Waiting to revive" is
+    /// the whole point of listing it: a Decimillipede segment is back two enemy turns
+    /// after it falls, and a plan made without that spends those turns on the wrong
+    /// segment.
+    /// </summary>
+    private static string FormatReviveLine(Dictionary<string, object?> enemy)
+    {
+        if (enemy.GetValueOrDefault("revive") is not Dictionary<string, object?> revive)
+            return "**Down, and staying down** (no revive scheduled) - cannot be targeted.";
+
+        object? turns = revive.GetValueOrDefault("in_turns");
+        object? hp = revive.GetValueOrDefault("hp");
+        string at = hp != null ? $" at {hp} HP" : "";
+        string by = revive.GetValueOrDefault("power_name") is object p ? $" ({p})" : "";
+        string when = turns != null ? $"in {turns} enemy turn(s)" : "on an unknown turn";
+        return $"**⚠ WAITING TO REVIVE** {when}{at}{by} - cannot be targeted until it is back.";
     }
 
     /// <summary>

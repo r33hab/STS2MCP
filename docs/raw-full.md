@@ -40,13 +40,18 @@ Every response — `menu` and error-ish states included — carries the build st
   "state_type": "...",      // Screen identifier (see sections below)
   "mod_version": "0.4.0",   // Mod version
   "mod_commit": "2de67cd",  // Git commit built from ("<sha>-dirty" from an edited tree); null if unknown
-  "schema_version": 1       // Contract version — see below
+  "schema_version": 2       // Contract version — see below
 }
 ```
 
 `schema_version` is bumped **only** when an existing field or action changes meaning or is removed.
 Purely additive changes (new fields, actions, parameters, `state_type`s) do not bump it, so
 feature-detect additions by presence and use `schema_version` only to notice a breaking change.
+
+- **2** — `battle.enemies` is no longer "the living enemies": a corpse the game keeps in the
+  fight (a Decimillipede segment waiting to reattach) is listed with `alive: false`. Filter on
+  the new `alive` field instead of assuming every entry is a valid target.
+- **1** — initial contract.
 
 Every response except `menu` additionally includes these top-level fields alongside the
 state-specific data:
@@ -368,6 +373,7 @@ Run state or room type not recognized.
         "entity_id": "JAW_WORM_0",    // Synthesized ID for targeting
         "combat_id": 42,               // Internal combat ID
         "name": "Jaw Worm",
+        "alive": true,                 // Always present. false = dead but still in the fight
         "hp": 44,
         "max_hp": 44,
         "block": 0,
@@ -380,6 +386,25 @@ Run state or room type not recognized.
             "description": "Deals 11 damage."  // Hover tip description
           }
         ]
+      },
+      {
+        // A dead enemy the game keeps in the fight (a Decimillipede segment waiting to
+        // reattach). Listed so the revive is visible; it cannot be targeted while dead.
+        "entity_id": "DECIMILLIPEDE_SEGMENT_1",
+        "combat_id": 44,
+        "name": "Decimillipede Segment",
+        "alive": false,
+        "hp": 0,
+        "max_hp": 46,
+        "block": 0,
+        "status": [ /* still carries REATTACH_POWER */ ],
+        "revive": {                    // Present only when it is actually coming back
+          "in_turns": 2,               // Enemy turns until it heals back up; null if unknown
+          "power_id": "REATTACH_POWER",
+          "power_name": "Reattach",
+          "hp": 25                     // HP it returns with; null when not readable
+        },
+        "intents": []                  // Becomes a Heal intent on the turn before the revive
       }
     ]
   },
@@ -387,6 +412,20 @@ Run state or room type not recognized.
   "player": { ... }  // Includes hand, energy, piles, orbs during combat
 }
 ```
+
+**Dead enemies.** `enemies[]` normally holds only living creatures, because the game drops a
+killed enemy from the fight. A few powers refuse that — `ReattachPower` on a Decimillipede
+segment is the one that matters — and their owner stays in the fight as a corpse. Those
+corpses are listed with `alive: false` and `hp: 0`, keeping the `entity_id` they already had,
+so a caller that never meets one sees no change. Filter on `alive` (not on `hp > 0`) to get
+the targetable enemies; `play_card` and `use_potion` already refuse a dead target.
+
+`revive` is present only when the corpse is actually scheduled to come back: `in_turns` is
+read off the monster's move chain (2 the turn it dies, 1 the turn before it stands up, and
+its `intents` then show `Heal`), and `hp` is the amount it heals for. A corpse held in the
+fight by something that never revives it (`DieForYouPower`, `IllusionPower`) has `alive: false`
+and no `revive`, and neither does the last segment of a Decimillipede — with no living peer
+left to reattach to, the fight is over rather than about to restart.
 
 ### `hand_select` — In-Combat Card Selection
 

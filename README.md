@@ -55,7 +55,7 @@ curl -s http://localhost:15526/
 A successful response looks like:
 
 ```json
-{"message": "Hello from STS2 MCP v0.4.0+2de67cd", "status": "ok", "version": "0.4.0", "commit": "2de67cd", "schema_version": 1}
+{"message": "Hello from STS2 MCP v0.4.0+2de67cd", "status": "ok", "version": "0.4.0", "commit": "2de67cd", "schema_version": 2}
 ```
 
 `commit` is the git revision the mod was built from (`null` if the build could not determine one) —

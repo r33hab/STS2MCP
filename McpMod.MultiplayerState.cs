@@ -273,19 +273,7 @@ public static partial class McpMod
         battle["is_play_phase"] = IsPlayPhase(combatState);
         battle["all_players_ready"] = CombatManager.Instance.AllPlayersReadyToEndTurn();
 
-        // Enemies
-        var enemies = new List<Dictionary<string, object?>>();
-        RefreshEntityIdRegistry(combatState);
-        var seenCombatIds = new HashSet<uint>();
-        foreach (var creature in combatState.Enemies)
-        {
-            if (!creature.IsAlive)
-                continue;
-            if (creature.CombatId is uint id && !seenCombatIds.Add(id))
-                continue;
-            enemies.Add(BuildEnemyState(creature));
-        }
-        battle["enemies"] = enemies;
+        battle["enemies"] = BuildEnemyList(combatState);
 
         return battle;
     }
