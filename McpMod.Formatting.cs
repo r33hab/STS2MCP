@@ -902,6 +902,19 @@ public static partial class McpMod
         sb.AppendLine();
     }
 
+    /// <summary>
+    /// Prints the upgraded form under a card line, on the screens where the state
+    /// carries it. Silent when the card has no "upgrade_preview".
+    /// </summary>
+    private static void AppendUpgradePreviewLine(StringBuilder sb, Dictionary<string, object?> card)
+    {
+        if (!card.TryGetValue("upgrade_preview", out var previewObj)
+            || previewObj is not Dictionary<string, object?> preview) return;
+
+        string starCost = preview.TryGetValue("star_cost", out var sc) && sc != null ? $" + {sc} star" : "";
+        sb.AppendLine($"  → **Upgraded**: ({preview.GetValueOrDefault("cost")} energy{starCost}) - {preview.GetValueOrDefault("description")}");
+    }
+
     private static void FormatCardRewardMarkdown(StringBuilder sb, Dictionary<string, object?> cardReward)
     {
         sb.AppendLine("## Card Reward Selection");
@@ -916,6 +929,7 @@ public static partial class McpMod
                 string keywords = card.TryGetValue("keywords", out var kw) && kw is List<string> kwList && kwList.Count > 0
                     ? $" [{string.Join(", ", kwList)}]" : "";
                 sb.AppendLine($"- [{card["index"]}] **{card["name"]}** ({card["cost"]} energy{starCost}) [{card["type"]}] {card["rarity"]}{keywords} - {card["description"]}");
+                AppendUpgradePreviewLine(sb, card);
             }
             sb.AppendLine();
         }
@@ -979,6 +993,7 @@ public static partial class McpMod
             {
                 string starCost = card.TryGetValue("star_cost", out var sc) && sc != null ? $" + {sc} star" : "";
                 sb.AppendLine($"- [{card["index"]}] **{card["name"]}** ({card["cost"]} energy{starCost}) [{card["type"]}] - {card["description"]}");
+                AppendUpgradePreviewLine(sb, card);
             }
             sb.AppendLine();
         }
@@ -1022,6 +1037,7 @@ public static partial class McpMod
             {
                 string starCost = card.TryGetValue("star_cost", out var sc) && sc != null ? $" + {sc} star" : "";
                 sb.AppendLine($"- [{card["index"]}] **{card["name"]}** ({card["cost"]} energy{starCost}) [{card["type"]}] {card["rarity"]} - {card["description"]}");
+                AppendUpgradePreviewLine(sb, card);
             }
             sb.AppendLine();
         }

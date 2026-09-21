@@ -1366,8 +1366,45 @@ public static partial class McpMod
             ["description"] = SafeGetCardDescription(card, pile),
             ["rarity"] = card.Rarity.ToString(),
             ["is_upgraded"] = card.IsUpgraded,
+            ["is_upgradable"] = card.IsUpgradable,
+            ["upgrade_level"] = card.CurrentUpgradeLevel,
+            ["max_upgrade_level"] = card.MaxUpgradeLevel,
             ["keywords"] = BuildHoverTips(card.HoverTips)
         };
+    }
+
+    /// <summary>
+    /// The card as it would read after one upgrade, or null when it cannot be upgraded
+    /// or the preview clone failed. Built from the real upgraded clone, so the numbers
+    /// are the game's own rather than something derived from the card text.
+    /// </summary>
+    private static Dictionary<string, object?>? BuildUpgradePreviewInfo(CardModel card)
+    {
+        var preview = SafeBuildUpgradedCardPreview(card);
+        if (preview == null) return null;
+
+        return new Dictionary<string, object?>
+        {
+            ["name"] = SafeGetText(() => preview.Title),
+            ["cost"] = GetCostDisplay(preview),
+            ["star_cost"] = GetStarCostDisplay(preview),
+            ["description"] = SafeGetCardDescription(preview),
+            ["keywords"] = BuildHoverTips(preview.HoverTips)
+        };
+    }
+
+    /// <summary>
+    /// Adds "upgrade_preview" to a card entry on the screens where an upgrade or a pick
+    /// is being decided. Cards already at their last upgrade level are skipped:
+    /// IsUpgraded alone is not the test, because a multi-level card at level 1 of 2 is
+    /// upgraded and still has an upgrade left.
+    /// </summary>
+    private static void AttachUpgradePreview(Dictionary<string, object?> cardInfo, CardModel card)
+    {
+        if (!card.IsUpgradable || card.CurrentUpgradeLevel >= card.MaxUpgradeLevel) return;
+
+        var preview = BuildUpgradePreviewInfo(card);
+        if (preview != null) cardInfo["upgrade_preview"] = preview;
     }
 
     private static Dictionary<string, object?> BuildCardState(CardModel card, int index)
@@ -2475,6 +2512,9 @@ public static partial class McpMod
 
             var cardInfo = BuildCardInfo(card);
             cardInfo["index"] = index;
+            // The upgraded form is part of what a reward card is worth, so it belongs in
+            // the choice rather than being discovered later at a smith.
+            AttachUpgradePreview(cardInfo, card);
             cards.Add(cardInfo);
             index++;
         }
@@ -2573,6 +2613,9 @@ public static partial class McpMod
 
             var cardInfo = BuildCardInfo(card);
             cardInfo["index"] = index;
+            // Only on the upgrade screen: the transform/remove screens do not upgrade
+            // anything, and every card carrying a preview would bloat the payload.
+            if (screen is NDeckUpgradeSelectScreen) AttachUpgradePreview(cardInfo, card);
             cards.Add(cardInfo);
             index++;
         }
@@ -2773,6 +2816,9 @@ public static partial class McpMod
             var cardInfo = BuildCardInfo(card);
             cardInfo["index"] = index;
             cardInfo["description"] = SafeGetCardDescription(card); // hand cards use default pile
+            // Only when the prompt is "upgrade a card in hand"; the plain select modes
+            // (discard, exhaust, ...) have nothing to decide from the upgraded text.
+            if (hand.CurrentMode == NPlayerHand.Mode.UpgradeSelect) AttachUpgradePreview(cardInfo, card);
             selectableCards.Add(cardInfo);
             index++;
         }
