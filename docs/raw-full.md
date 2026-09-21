@@ -1081,9 +1081,25 @@ All POST requests use a JSON body with an `"action"` field and action-specific p
 
 ### Error Response
 
+Action failures — the action was understood but could not be performed — are returned with
+**HTTP 200**:
+
 ```jsonc
 { "status": "error", "error": "Card requires a target. Provide 'target' with an entity_id." }
 ```
+
+Transport failures — invalid JSON, a missing `action` field, an unknown route, a wrong HTTP method,
+the wrong run mode for the endpoint, or an unhandled exception — use an **HTTP 4xx/5xx** code but the
+same body shape:
+
+```jsonc
+// HTTP 400
+{ "status": "error", "error": "Missing 'action' field" }
+```
+
+So every POST response body carries `status` (`"ok"` or `"error"`), and `error` is present if and
+only if `status` is `"error"`. Branching on `status` alone is enough; the HTTP code only distinguishes
+*where* the failure happened.
 
 ---
 

@@ -75,7 +75,7 @@ public static partial class McpMod
         try
         {
             var resultTask = RunOnMainThread(() => ExecuteProfileAction(action, profileId));
-            SendJson(response, resultTask.GetAwaiter().GetResult(), pretty);
+            SendJson(response, EnsureStatus(resultTask.GetAwaiter().GetResult()), pretty);
         }
         catch (Exception ex)
         {
