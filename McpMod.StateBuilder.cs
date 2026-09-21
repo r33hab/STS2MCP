@@ -52,6 +52,8 @@ using MegaCrit.Sts2.Core.Nodes.Screens.GameOverScreen;
 using MegaCrit.Sts2.Core.Nodes.Screens.Timeline;
 using MegaCrit.Sts2.Core.Nodes.Screens.Settings;
 using MegaCrit.Sts2.Core.Nodes.Screens.ProfileScreen;
+using MegaCrit.Sts2.Core.Nodes.Screens.PauseMenu;
+using MegaCrit.Sts2.Core.Nodes.Screens.Capstones;
 using Godot;
 
 namespace STS2_MCP;
@@ -431,9 +433,17 @@ public static partial class McpMod
         // The settings screen is pushed on the run's submenu stack, over everything below.
         // It is checked first so the room underneath is not reported as the live screen.
         var settingsState = TryBuildSettingsMenuState(tree?.Root, inRun: true);
+        // The pause menu shares that stack, and settings can be pushed on top of the
+        // pause menu, so settings has to keep winning when both are up.
+        var pauseState = settingsState == null ? TryBuildPauseMenuState(tree?.Root) : null;
         if (settingsState != null)
         {
             foreach (var entry in settingsState)
+                result[entry.Key] = entry.Value;
+        }
+        else if (pauseState != null)
+        {
+            foreach (var entry in pauseState)
                 result[entry.Key] = entry.Value;
         }
         else if (topOverlay is NCardGridSelectionScreen cardSelectScreen)
@@ -765,7 +775,7 @@ public static partial class McpMod
     /// </summary>
     private static Dictionary<string, object?> BuildSettingsMenuState(NSettingsScreen settingsScreen, bool inRun)
     {
-        var backButton = FindSettingsBackButton(settingsScreen);
+        var backButton = GetSubmenuBackButton(settingsScreen);
 
         return new Dictionary<string, object?>
         {
@@ -783,19 +793,176 @@ public static partial class McpMod
     }
 
     /// <summary>
-    /// _backButton is declared on NSubmenu, not on NSettingsScreen; GetInstanceFieldValue
-    /// walks base types, and the tree search is the fallback for a future layout change.
+    /// The back button of any screen on a submenu stack - the one exit every such screen
+    /// is guaranteed to have. _backButton is declared on NSubmenu, not on the concrete
+    /// screens; GetInstanceFieldValue walks base types, and the tree search is the
+    /// fallback for a future layout change.
     /// </summary>
-    private static NClickableControl? FindSettingsBackButton(NSettingsScreen settingsScreen)
+    private static NClickableControl? GetSubmenuBackButton(NSubmenu submenu)
     {
         try
         {
-            if (GetInstanceFieldValue(settingsScreen, "_backButton") is NClickableControl clickable)
+            if (GetInstanceFieldValue(submenu, "_backButton") is NClickableControl clickable)
                 return clickable;
         }
         catch { /* reflection is best-effort; fall back to the tree search */ }
 
-        return FindFirst<NBackButton>(settingsScreen);
+        return FindFirst<NBackButton>(submenu);
+    }
+
+    /// <summary>
+    /// The submenu currently covering the run, or null when nothing is.
+    ///
+    /// NCapstoneContainer is the authority - NTopBarPauseButton.IsOpen() reads the same
+    /// property. A visibility test alone is not enough: NCapstoneSubmenuStack.ShowScreen
+    /// pushes the screen before NCapstoneContainer.Open reparents it, so the menu is
+    /// live before it is visible in the tree. The node search is the fallback.
+    /// </summary>
+    internal static NSubmenu? GetOpenRunSubmenu(Node? root)
+    {
+        try
+        {
+            if (NCapstoneContainer.Instance?.CurrentCapstoneScreen is NCapstoneSubmenuStack submenuStack)
+            {
+                var top = submenuStack.Stack?.Peek();
+                if (top != null && IsLiveNode(top))
+                    return top;
+            }
+        }
+        catch { /* no capstone container outside a run; fall through */ }
+
+        if (root == null)
+            return null;
+
+        var pauseMenu = FindFirst<NPauseMenu>(root);
+        return pauseMenu != null && IsNodeVisible(pauseMenu) ? pauseMenu : null;
+    }
+
+    /// <summary>
+    /// The pause menu (top-bar gear / Esc) is pushed on the run's submenu stack inside
+    /// the capstone container, exactly like the settings screen, so nothing else in this
+    /// builder notices it. Left unreported, state describes the room underneath while
+    /// the player is looking at a paused menu, and every action is aimed at a screen
+    /// that is not on top. See A-5 of the operator-side issue log.
+    ///
+    /// Anything else pushed on that stack (the in-run compendium and the screens it
+    /// opens) is reported generically with a `back` option, so entering one can never
+    /// become a screen the API has no way out of.
+    ///
+    /// Returns null when no such screen is up, so callers fall through unchanged.
+    /// </summary>
+    private static Dictionary<string, object?>? TryBuildPauseMenuState(Node? root)
+    {
+        var submenu = GetOpenRunSubmenu(root);
+        if (submenu == null)
+            return null;
+
+        return submenu is NPauseMenu pauseMenu
+            ? BuildPauseMenuState(pauseMenu)
+            : BuildRunSubmenuState(submenu);
+    }
+
+    /// <summary>
+    /// The six NPauseMenu button fields, in the order NPauseMenu.Buttons declares them.
+    /// </summary>
+    private static readonly (string Field, string Name)[] _pauseMenuButtons =
+    {
+        ("_resumeButton", "resume"),
+        ("_settingsButton", "settings"),
+        ("_compendiumButton", "compendium"),
+        ("_giveUpButton", "give_up"),
+        ("_disconnectButton", "disconnect"),
+        ("_saveAndQuitButton", "save_and_quit")
+    };
+
+    private static List<Dictionary<string, object?>> BuildPauseMenuOptions(NPauseMenu pauseMenu)
+    {
+        var options = new List<Dictionary<string, object?>>();
+        foreach (var (field, name) in _pauseMenuButtons)
+        {
+            try
+            {
+                // Only the button's own Visible flag is read. NPauseMenu._Ready and
+                // Initialize set it per game mode (give_up / save_and_quit are hidden
+                // for multiplayer clients, disconnect only for them, compendium until
+                // it is unlocked), while IsVisibleInTree is still false on the frame
+                // the menu is being reparented into the capstone container - which
+                // would report a pause menu with no options at all.
+                if (GetInstanceFieldValue(pauseMenu, field) is not Control button || !button.Visible)
+                    continue;
+
+                options.Add(new Dictionary<string, object?>
+                {
+                    ["name"] = name,
+                    ["enabled"] = (button as NClickableControl)?.IsEnabled ?? true
+                });
+            }
+            catch { /* a missing field means the game moved it; skip the option */ }
+        }
+        return options;
+    }
+
+    private static Dictionary<string, object?> BuildPauseMenuState(NPauseMenu pauseMenu)
+    {
+        return new Dictionary<string, object?>
+        {
+            ["state_type"] = "menu",
+            ["menu_screen"] = "pause",
+            ["in_run"] = true,
+            ["message"] =
+                "Run paused. 'resume' closes this menu and returns to the run; 'settings' and "
+                + "'compendium' open screens that 'back' leaves again; 'give_up' abandons the run "
+                + "permanently (it asks for confirmation first, answered with yes/no); "
+                + "'save_and_quit' returns to the main menu, where 'continue' resumes this run.",
+            ["options"] = BuildPauseMenuOptions(pauseMenu)
+        };
+    }
+
+    /// <summary>
+    /// Any other screen on the run's submenu stack (compendium and what it opens).
+    /// Only `back` is modelled - the point is that the API can leave a screen it can
+    /// enter, not that it can drive the compendium.
+    /// </summary>
+    private static Dictionary<string, object?> BuildRunSubmenuState(NSubmenu submenu)
+    {
+        var screen = SubmenuScreenName(submenu);
+        var backButton = GetSubmenuBackButton(submenu);
+
+        return new Dictionary<string, object?>
+        {
+            ["state_type"] = "menu",
+            ["menu_screen"] = screen,
+            ["in_run"] = true,
+            ["screen_class"] = submenu.GetType().Name,
+            ["message"] = $"{screen} screen, opened from the pause menu. The run is paused "
+                          + "underneath; 'back' returns to the previous screen.",
+            ["options"] = new List<Dictionary<string, object?>>
+            {
+                new() { ["name"] = "back", ["enabled"] = backButton?.IsEnabled ?? true }
+            }
+        };
+    }
+
+    /// <summary>
+    /// "NCompendiumSubmenu" -> "compendium", "NCardLibrary" -> "card_library". Derived
+    /// rather than listed so a screen the game adds later still gets a usable name and a
+    /// working `back`, instead of being reported as an unnamed screen with no way out.
+    /// </summary>
+    private static string SubmenuScreenName(NSubmenu submenu)
+    {
+        var name = submenu.GetType().Name;
+        if (name.Length > 1 && name[0] == 'N' && char.IsUpper(name[1]))
+            name = name[1..];
+        foreach (var suffix in new[] { "Submenu", "Screen" })
+        {
+            if (name.Length > suffix.Length && name.EndsWith(suffix, StringComparison.Ordinal))
+                name = name[..^suffix.Length];
+        }
+
+        name = System.Text.RegularExpressions.Regex
+            .Replace(name, "(?<=[a-z0-9])(?=[A-Z])", "_")
+            .ToLowerInvariant();
+        return name.Length > 0 ? name : "submenu";
     }
 
     private static void AddCharacterSelectMenuState(
