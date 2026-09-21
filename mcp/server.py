@@ -202,6 +202,16 @@ async def menu_select(option: str, seed: str | None = None, ascension: int | Non
     On menu_screen "settings" (reported both on the main menu and mid-run) the
     only option is "back", which closes the screen and returns to what was under it.
 
+    On menu_screen "pause" (the in-run pause menu, opened with open_pause_menu):
+      - "resume" (aliases back / close / continue) returns to the run.
+      - "settings" and "compendium" open screens that "back" leaves again.
+      - "give_up" (alias abandon) ABANDONS THE RUN PERMANENTLY. It opens the
+        game's confirmation popup, which the next state reports as menu_screen
+        "popup"; it is never auto-confirmed, so answer it with "yes" or "no".
+      - "save_and_quit" (alias main_menu) saves and returns to the main menu,
+        where "continue" resumes the run. "disconnect" appears in multiplayer.
+    On the screens the pause menu opens the only option is "back".
+
     Multiplayer flow tips:
       - On menu_screen "multiplayer_join", use refresh / back / join_<index> /
         join_<player_id> (e.g. "join_0" or "join_76561198000000000").
@@ -228,6 +238,25 @@ async def menu_select(option: str, seed: str | None = None, ascension: int | Non
         body["ascension"] = ascension
     try:
         return await _post(body)
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def open_pause_menu() -> str:
+    """Open the in-run pause menu (the top-bar gear / Esc).
+
+    This is the only API route out of a run: the state that follows is
+    state_type "menu", menu_screen "pause", and menu_select drives it from
+    there. Requires a run in progress; it answers `already_open: true` when the
+    menu is already up, and errors when another screen is stacked on top of it
+    (leave that with menu_select "back") or while a card is still being played.
+
+    WARNING: on that menu "give_up" abandons the run permanently (it asks for
+    confirmation first) and "save_and_quit" ends the session at the main menu.
+    """
+    try:
+        return await _post({"action": "open_pause_menu"})
     except Exception as e:
         return _handle_error(e)
 

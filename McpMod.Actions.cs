@@ -42,6 +42,8 @@ using MegaCrit.Sts2.Core.Nodes.Screens.Timeline;
 using MegaCrit.Sts2.Core.Nodes.Screens.Timeline.UnlockScreens;
 using MegaCrit.Sts2.Core.Nodes.Screens.ProfileScreen;
 using MegaCrit.Sts2.Core.Nodes.Screens.Settings;
+using MegaCrit.Sts2.Core.Nodes.Screens.PauseMenu;
+using MegaCrit.Sts2.Core.Nodes.TopBar;
 using Godot;
 
 namespace STS2_MCP;
@@ -62,8 +64,13 @@ public static partial class McpMod
         if (tree?.Root != null && IsAnyFtueVisible(tree.Root))
             return Error("Blocking popup active. Use menu_select with one of the advertised popup options before gameplay actions.");
 
+        var covered = RunSubmenuBlockingError(tree, action);
+        if (covered != null)
+            return covered;
+
         return action switch
         {
+            "open_pause_menu" or "pause" => ExecuteOpenPauseMenu(runState),
             "play_card" => ExecutePlayCard(player, data),
             "use_potion" => ExecuteUsePotion(player, data),
             "sell_potion" => ExecuteSellPotion(player, data),
@@ -1743,8 +1750,17 @@ public static partial class McpMod
         var settingsScreen = FindFirst<NSettingsScreen>(tree.Root);
         if (settingsScreen != null && IsNodeVisible(settingsScreen))
         {
-            return ExecuteSettingsScreenMenuOption(settingsScreen, option);
+            return ExecuteSubmenuBackOption(settingsScreen, option);
         }
+
+        // The pause menu, and anything pushed above it on the run's submenu stack (the
+        // compendium and the screens it opens). Checked after settings so the settings
+        // screen keeps winning while it sits on top of the pause menu.
+        var runSubmenu = GetOpenRunSubmenu(tree.Root);
+        if (runSubmenu is NPauseMenu pauseMenu)
+            return ExecutePauseMenuOption(pauseMenu, option);
+        if (runSubmenu != null)
+            return ExecuteSubmenuBackOption(runSubmenu, option);
 
         // Timeline screen - advance through epoch reveals.
         var timelineScreen = FindFirst<NTimelineScreen>(tree.Root);
@@ -2019,23 +2035,25 @@ public static partial class McpMod
     }
 
     /// <summary>
-    /// Only 'back' is offered. Changing a setting (tabs, tickboxes, sliders) is
-    /// deliberately not implemented - the bug being fixed is that the API could enter
-    /// this screen and not leave it.
+    /// Leaves any screen sitting on a submenu stack: the settings screen, and whatever
+    /// the in-run pause menu opens (the compendium and its sub-screens).
+    ///
+    /// Only 'back' is offered. Driving those screens (settings tabs, tickboxes, sliders,
+    /// compendium pages) is deliberately not implemented - the bug being fixed is that
+    /// the API could enter a screen and not leave it.
     /// </summary>
-    private static Dictionary<string, object?> ExecuteSettingsScreenMenuOption(
-        NSettingsScreen settingsScreen,
-        string option)
+    private static Dictionary<string, object?> ExecuteSubmenuBackOption(NSubmenu submenu, string option)
     {
+        var screen = SubmenuScreenName(submenu);
         var normalized = option.ToLowerInvariant();
         if (normalized != "back" && normalized != "close" && normalized != "resume")
-            return Error($"Unknown settings option: {option}. Use: back");
+            return Error($"Unknown {screen} option: {option}. Use: back");
 
-        var backButton = FindSettingsBackButton(settingsScreen);
+        var backButton = GetSubmenuBackButton(submenu);
         if (backButton != null && backButton.IsEnabled && IsNodeVisible(backButton))
         {
             backButton.ForceClick();
-            return new Dictionary<string, object?> { ["status"] = "ok", ["message"] = "Left the settings screen" };
+            return new Dictionary<string, object?> { ["status"] = "ok", ["message"] = $"Left the {screen} screen" };
         }
 
         // The back button is hidden or disabled while the submenu stack animates, which
@@ -2043,7 +2061,7 @@ public static partial class McpMod
         // the stack is what the button itself does, so this lands in the same place.
         try
         {
-            var stack = GetInstanceFieldValue(settingsScreen, "_stack");
+            var stack = GetInstanceFieldValue(submenu, "_stack");
             var popMethod = stack?.GetType().GetMethod("Pop");
             if (stack != null && popMethod != null)
             {
@@ -2051,13 +2069,180 @@ public static partial class McpMod
                 return new Dictionary<string, object?>
                 {
                     ["status"] = "ok",
-                    ["message"] = "Left the settings screen (popped the submenu stack)"
+                    ["message"] = $"Left the {screen} screen (popped the submenu stack)"
                 };
             }
         }
         catch { /* fall through to the error below */ }
 
-        return Error("Settings screen is open but neither its back button nor its submenu stack could close it");
+        return Error($"The {screen} screen is open but neither its back button nor its submenu stack could close it");
+    }
+
+    /// <summary>
+    /// The pause menu's own options.
+    ///
+    /// 'give_up' is deliberately not confirmed here: NPauseMenu.OnGiveUpButtonPressed
+    /// puts an NAbandonRunConfirmPopup in the modal container, which the next state
+    /// reports as menu_screen "popup" with yes/no. Abandoning a run is irreversible, so
+    /// the caller has to say yes to it explicitly.
+    /// </summary>
+    private static Dictionary<string, object?> ExecutePauseMenuOption(NPauseMenu pauseMenu, string option)
+    {
+        var normalized = option.ToLowerInvariant();
+        string? field = normalized switch
+        {
+            "resume" or "back" or "close" or "continue" => "_resumeButton",
+            "settings" => "_settingsButton",
+            "compendium" => "_compendiumButton",
+            "give_up" or "giveup" or "abandon" or "abandon_run" => "_giveUpButton",
+            "disconnect" => "_disconnectButton",
+            "save_and_quit" or "main_menu" or "quit" => "_saveAndQuitButton",
+            _ => null
+        };
+
+        if (field == null)
+        {
+            var available = BuildPauseMenuOptions(pauseMenu)
+                .Select(entry => entry.GetValueOrDefault("name")?.ToString())
+                .Where(name => !string.IsNullOrEmpty(name));
+            return Error($"Unknown pause menu option: {option}. Use: {string.Join(", ", available)}");
+        }
+
+        var message = field switch
+        {
+            "_resumeButton" => "Resumed the run",
+            "_settingsButton" => "Opened settings. Use menu_select option 'back' to return to the pause menu.",
+            "_compendiumButton" => "Opened the compendium. Use menu_select option 'back' to return to the pause menu.",
+            "_giveUpButton" => "Opened the give-up confirmation. Answer it with menu_select option 'yes' "
+                               + "(this abandons the run permanently) or 'no'.",
+            "_disconnectButton" => "Disconnecting from the multiplayer run",
+            _ => "Saving and returning to the main menu. The run can be resumed there with menu_select option 'continue'."
+        };
+
+        return ClickMenuButtonField(
+            pauseMenu,
+            field,
+            message,
+            $"Pause menu option '{normalized}' is not available in this run");
+    }
+
+    /// <summary>
+    /// Opens the in-run pause menu the way the top-bar gear does.
+    ///
+    /// Without it there was no API way into the pause menu and therefore no API way out
+    /// of a run at all: 'abandon_run' is a main-menu button and 'main_menu' only exists
+    /// on the game-over screen, so an unattended agent that got stuck needed a mouse.
+    /// </summary>
+    private static Dictionary<string, object?> ExecuteOpenPauseMenu(IRunState runState)
+    {
+        var tree = Engine.GetMainLoop() as SceneTree;
+
+        var open = GetOpenRunSubmenu(tree?.Root);
+        if (open is NPauseMenu)
+        {
+            return new Dictionary<string, object?>
+            {
+                ["status"] = "ok",
+                ["already_open"] = true,
+                ["message"] = "Pause menu is already open."
+            };
+        }
+
+        if (open != null)
+        {
+            // Clicking the gear now would toggle the whole capstone shut and resume the
+            // run - the opposite of what was asked for.
+            return Error(
+                $"The {SubmenuScreenName(open)} screen is already open over the run. "
+                + "Use menu_select option 'back' to return to the pause menu.");
+        }
+
+        // A card still in flight resolves against the room that is about to be covered.
+        try
+        {
+            if (NPlayerHand.Instance is { InCardPlay: true })
+                return Error("A card is still being played. Wait for is_resolving to clear, then pause.");
+        }
+        catch { /* no hand outside combat */ }
+
+        var pauseButton = SafeGetTopBarPauseButton(tree?.Root);
+        if (pauseButton != null)
+        {
+            try
+            {
+                pauseButton.ForceClick();
+                if (GetOpenRunSubmenu(tree?.Root) is NPauseMenu)
+                    return OpenedPauseMenuResult();
+            }
+            catch { /* fall through to the direct call below */ }
+        }
+
+        // Fallback for a top bar that is hidden or not yet initialized: the same two
+        // calls NTopBarPauseButton.OnRelease makes.
+        try
+        {
+            var stack = MegaCrit.Sts2.Core.Nodes.NRun.Instance?.GlobalUi?.SubmenuStack;
+            if (stack != null)
+            {
+                if (stack.ShowScreen(CapstoneSubmenuType.PauseMenu) is NPauseMenu menu)
+                {
+                    menu.Initialize(runState);
+                    return OpenedPauseMenuResult();
+                }
+            }
+        }
+        catch (System.Exception ex)
+        {
+            return Error($"Could not open the pause menu: {ex.Message}");
+        }
+
+        return Error("Could not open the pause menu: neither the top-bar pause button nor the run's submenu stack is available");
+    }
+
+    private static Dictionary<string, object?> OpenedPauseMenuResult()
+        => new()
+        {
+            ["status"] = "ok",
+            ["already_open"] = false,
+            ["message"] = "Opened the pause menu. The run is paused; use menu_select to pick an option."
+        };
+
+    /// <summary>
+    /// Prefers the live top bar's own button so the click follows exactly the path a
+    /// human takes; the tree search covers a top bar that has not been wired up yet.
+    /// </summary>
+    private static NTopBarPauseButton? SafeGetTopBarPauseButton(Node? root)
+    {
+        try
+        {
+            var button = MegaCrit.Sts2.Core.Nodes.NRun.Instance?.GlobalUi?.TopBar?.Pause;
+            if (button != null && IsLiveNode(button))
+                return button;
+        }
+        catch { /* fall through to the tree search */ }
+
+        return root == null ? null : FindFirst<NTopBarPauseButton>(root);
+    }
+
+    /// <summary>
+    /// The pause menu and the screens reachable from it cover the room with a capstone
+    /// screen the room knows nothing about, so a gameplay action sent while one is up
+    /// lands on a screen the player cannot see (A-5). menu_select drives whatever is
+    /// visible; everything else waits until it is closed.
+    /// </summary>
+    private static Dictionary<string, object?>? RunSubmenuBlockingError(SceneTree? tree, string action)
+    {
+        if (action is "open_pause_menu" or "pause")
+            return null;
+
+        var submenu = GetOpenRunSubmenu(tree?.Root);
+        if (submenu == null)
+            return null;
+
+        var screen = submenu is NPauseMenu ? "pause menu" : $"{SubmenuScreenName(submenu)} screen";
+        return Error(
+            $"The {screen} is open over the run. Close it with menu_select "
+            + "(option 'resume' on the pause menu, 'back' elsewhere) before sending gameplay actions.");
     }
 
     private static Dictionary<string, object?> ExecuteJoinScreenMenuOption(

@@ -31,9 +31,14 @@ public static partial class McpMod
         if (tree?.Root != null && IsAnyFtueVisible(tree.Root))
             return Error("Blocking popup active. Use menu_select with one of the advertised popup options before gameplay actions.");
 
+        var covered = RunSubmenuBlockingError(tree, action);
+        if (covered != null)
+            return covered;
+
         return action switch
         {
             // Delegated to existing sync-safe handlers
+            "open_pause_menu" or "pause" => ExecuteOpenPauseMenu(runState),
             "play_card" => ExecutePlayCard(player, data),
             "use_potion" => ExecuteUsePotion(player, data),
             "discard_potion" => ExecuteDiscardPotion(player, data),
