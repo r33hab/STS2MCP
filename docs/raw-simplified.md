@@ -82,6 +82,16 @@ that is either `"ok"` or `"error"`. A client only needs that one key:
 `error` is present if and only if `status` is `"error"`. GET responses return state payloads and
 are not covered by this contract (`GET /` is the exception and reports `"status": "ok"`).
 
+### Errors
+
+| Status | Meaning |
+|---|---|
+| `200` with `"status": "error"` | The action ran and was rejected (bad parameters, illegal move). Retrying the same request will fail the same way. |
+| `500` | The action ran and threw. |
+| `503` with `"retry": true` | **The action did NOT run.** The game's main thread did not answer within 10 s, or more than 32 requests are already queued — the game is not processing frames (scene load, hang, minimized/paused app). Body: `{ "error": "...", "status": "error", "retry": true }`. Nothing was applied to the run, so the request may be sent again once the game is responsive. |
+
+This applies to GET endpoints too; every request is served from the game's main thread.
+
 ### Menu / Game Over
 
 | Action | Parameters | When to Use |

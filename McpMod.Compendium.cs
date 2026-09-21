@@ -24,9 +24,12 @@ public static partial class McpMod
         bool pretty = WantsPretty(request);
         try
         {
-            var snapshotTask = RunOnMainThread(BuildCompendiumSnapshot);
-            var snapshot = snapshotTask.GetAwaiter().GetResult();
+            var snapshot = RunOnMainThreadBlocking(BuildCompendiumSnapshot);
             SendJson(response, BuildCompendiumResponse(snapshot), pretty);
+        }
+        catch (MainThreadUnavailableException ex)
+        {
+            SendUnavailable(response, ex.Message, pretty);
         }
         catch (Exception ex)
         {

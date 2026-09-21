@@ -31,8 +31,11 @@ public static partial class McpMod
 
         try
         {
-            var dataTask = RunOnMainThread(() => BuildWikiSearch(query, itemType, limit, scope));
-            SendJson(response, dataTask.GetAwaiter().GetResult(), pretty);
+            SendJson(response, RunOnMainThreadBlocking(() => BuildWikiSearch(query, itemType, limit, scope)), pretty);
+        }
+        catch (MainThreadUnavailableException ex)
+        {
+            SendUnavailable(response, ex.Message, pretty);
         }
         catch (Exception ex)
         {

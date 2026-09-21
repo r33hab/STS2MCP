@@ -1101,6 +1101,19 @@ So every POST response body carries `status` (`"ok"` or `"error"`), and `error` 
 only if `status` is `"error"`. Branching on `status` alone is enough; the HTTP code only distinguishes
 *where* the failure happened.
 
+### Unavailable Response (HTTP 503)
+
+```jsonc
+{ "error": "timed out after 10000 ms waiting for the game's main thread", "status": "error", "retry": true }
+```
+
+Every request — GET included — is executed on the game's main thread, which is pumped once per
+rendered frame. A `503` with `"retry": true` means the request **was not executed**: the main thread
+did not answer within 10 s, or more than 32 requests are already queued, which only happens when the
+game is not processing frames (scene load, hang, minimized or paused app). Nothing was applied to the
+run, so the same request may be sent again once the game is responsive. Contrast with `500`, where
+the action ran and threw.
+
 ---
 
 ### `menu_select`

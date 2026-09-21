@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -35,6 +36,24 @@ public static partial class McpMod
 
     public const int DefaultPort = 15526;
     private const string ConfigFileName = "STS2_MCP.conf";
+
+    /// <summary>
+    /// How long an HTTP request waits for the game's main thread before giving up (503).
+    ///
+    /// A click-sized action resolves within the frame it is dequeued in, so this is never
+    /// reached while the game renders; ten seconds only elapses when frames have stopped
+    /// (scene load, hang, the OS pausing the app) and no wait would ever succeed.
+    /// </summary>
+    internal const int MainThreadTimeoutMs = 10_000;
+
+    /// <summary>
+    /// How many actions may sit in the main-thread queue before new requests are rejected (503).
+    ///
+    /// The queue is drained ten per frame, so a healthy game never accumulates this many:
+    /// 32 pending items means nobody is draining it, and enqueueing more would only pile up
+    /// stale actions that all fire at once when frames resume.
+    /// </summary>
+    internal const int MainThreadQueueLimit = 32;
 
     private static string? _buildCommit;
     private static bool _buildCommitResolved;
@@ -223,6 +242,73 @@ public static partial class McpMod
         return tcs.Task;
     }
 
+    /// <summary>Per-request flag telling a queued closure that its caller has stopped waiting.</summary>
+    private sealed class MainThreadCancellation
+    {
+        // volatile: written on the HTTP thread, read on the game's main thread.
+        internal volatile bool Cancelled;
+    }
+
+    /// <summary>
+    /// Runs <paramref name="func"/> on the game's main thread and waits for it.
+    ///
+    /// Every blocking HTTP handler goes through here instead of waiting on the task forever:
+    /// the queue is drained from Godot's ProcessFrame signal, so when frames stop (scene load,
+    /// hang, the OS pausing the app, a modal the engine blocks on) a plain wait never returns.
+    /// That held a ThreadPool thread per request, and - worse - every request queued meanwhile
+    /// still ran once frames resumed, so an agent that retried `end_turn` five times got five
+    /// end_turns.
+    /// </summary>
+    /// <exception cref="MainThreadUnavailableException">
+    /// The queue is already backed up, or the main thread did not answer in time. In both cases
+    /// the work was NOT performed, so the caller may retry.
+    /// </exception>
+    internal static T RunOnMainThreadBlocking<T>(Func<T> func, int timeoutMs = MainThreadTimeoutMs)
+    {
+        int pending = _mainThreadQueue.Count;
+        if (pending >= MainThreadQueueLimit)
+        {
+            throw new MainThreadUnavailableException(
+                $"main thread queue is full ({pending} pending); the game is not processing frames");
+        }
+
+        var cancellation = new MainThreadCancellation();
+        var tcs = new TaskCompletionSource<T>();
+        _mainThreadQueue.Enqueue(() =>
+        {
+            // The client already gave up on this request; running the action now would apply a
+            // command the caller has since retried or abandoned.
+            if (cancellation.Cancelled) return;
+
+            try { tcs.SetResult(func()); }
+            catch (Exception ex) { tcs.SetException(ex); }
+        });
+
+        bool completed;
+        try
+        {
+            completed = tcs.Task.Wait(timeoutMs);
+        }
+        catch (AggregateException ex) when (ex.InnerException != null)
+        {
+            // Unwrap so callers' `catch (Exception ex)` keeps showing the action's own message.
+            ExceptionDispatchInfo.Capture(ex.InnerException).Throw();
+            throw; // unreachable; satisfies definite assignment
+        }
+
+        if (!completed)
+        {
+            // Unavoidable race: if the closure has already started running, setting this changes
+            // nothing and the action completes anyway. A click-sized action resolves inside one
+            // frame, so in practice a timeout means the closure never started.
+            cancellation.Cancelled = true;
+            throw new MainThreadUnavailableException(
+                $"timed out after {timeoutMs} ms waiting for the game's main thread");
+        }
+
+        return tcs.Task.GetAwaiter().GetResult();
+    }
+
     private static void ServerLoop()
     {
         while (_listener?.IsListening == true)
@@ -341,6 +427,13 @@ public static partial class McpMod
                 SendError(response, 404, "Not found", pretty);
             }
         }
+        // Safety net for any blocking call reached outside a handler's own try/catch: a stalled
+        // main thread must never be reported as an internal error.
+        catch (MainThreadUnavailableException ex)
+        {
+            try { SendUnavailable(context.Response, ex.Message, WantsPretty(context.Request)); }
+            catch { /* response may already be closed */ }
+        }
         catch (Exception ex)
         {
             try
@@ -372,8 +465,7 @@ public static partial class McpMod
 
         try
         {
-            var stateTask = RunOnMainThread(() => BuildMultiplayerGameState());
-            var state = stateTask.GetAwaiter().GetResult();
+            var state = RunOnMainThreadBlocking(() => BuildMultiplayerGameState());
 
             if (format == "markdown")
             {
@@ -384,6 +476,11 @@ public static partial class McpMod
             {
                 SendJson(response, state, pretty);
             }
+        }
+        catch (MainThreadUnavailableException ex)
+        {
+            try { SendUnavailable(response, ex.Message, pretty); }
+            catch { /* response may be unusable */ }
         }
         catch (Exception ex)
         {
@@ -439,9 +536,12 @@ public static partial class McpMod
                 var option = parsed.TryGetValue("option", out var optElem) ? optElem.GetString() ?? "" : "";
                 var seed = parsed.TryGetValue("seed", out var seedElem) ? seedElem.GetString() : null;
                 int? ascension = ReadOptionalInt(parsed, "ascension");
-                var resultTask = RunOnMainThread(() => ExecuteMenuSelect(option, seed, ascension));
-                var result = resultTask.GetAwaiter().GetResult();
+                var result = RunOnMainThreadBlocking(() => ExecuteMenuSelect(option, seed, ascension));
                 SendJson(response, EnsureStatus(result), pretty);
+            }
+            catch (MainThreadUnavailableException ex)
+            {
+                SendUnavailable(response, ex.Message, pretty);
             }
             catch (Exception ex)
             {
@@ -452,9 +552,12 @@ public static partial class McpMod
 
         try
         {
-            var resultTask = RunOnMainThread(() => ExecuteMultiplayerAction(action, parsed));
-            var result = resultTask.GetAwaiter().GetResult();
+            var result = RunOnMainThreadBlocking(() => ExecuteMultiplayerAction(action, parsed));
             SendJson(response, EnsureStatus(result), pretty);
+        }
+        catch (MainThreadUnavailableException ex)
+        {
+            SendUnavailable(response, ex.Message, pretty);
         }
         catch (Exception ex)
         {
@@ -480,8 +583,7 @@ public static partial class McpMod
 
         try
         {
-            var stateTask = RunOnMainThread(() => BuildGameState());
-            var state = stateTask.GetAwaiter().GetResult();
+            var state = RunOnMainThreadBlocking(() => BuildGameState());
 
             if (format == "markdown")
             {
@@ -499,6 +601,11 @@ public static partial class McpMod
             {
                 SendJson(response, state, pretty);
             }
+        }
+        catch (MainThreadUnavailableException ex)
+        {
+            try { SendUnavailable(response, ex.Message, pretty); }
+            catch { /* response may be unusable */ }
         }
         catch (Exception ex)
         {
@@ -548,8 +655,11 @@ public static partial class McpMod
         {
             try
             {
-                var resultTask = RunOnMainThread(() => ExecuteTimelineRevealEpochs());
-                SendJson(response, EnsureStatus(resultTask.GetAwaiter().GetResult()), pretty);
+                SendJson(response, EnsureStatus(RunOnMainThreadBlocking(() => ExecuteTimelineRevealEpochs())), pretty);
+            }
+            catch (MainThreadUnavailableException ex)
+            {
+                SendUnavailable(response, ex.Message, pretty);
             }
             catch (Exception ex)
             {
@@ -566,9 +676,12 @@ public static partial class McpMod
                 var option = parsed.TryGetValue("option", out var optElem) ? optElem.GetString() ?? "" : "";
                 var seed = parsed.TryGetValue("seed", out var seedElem) ? seedElem.GetString() : null;
                 int? ascension = ReadOptionalInt(parsed, "ascension");
-                var resultTask = RunOnMainThread(() => ExecuteMenuSelect(option, seed, ascension));
-                var result = resultTask.GetAwaiter().GetResult();
+                var result = RunOnMainThreadBlocking(() => ExecuteMenuSelect(option, seed, ascension));
                 SendJson(response, EnsureStatus(result), pretty);
+            }
+            catch (MainThreadUnavailableException ex)
+            {
+                SendUnavailable(response, ex.Message, pretty);
             }
             catch (Exception ex)
             {
@@ -579,13 +692,26 @@ public static partial class McpMod
 
         try
         {
-            var resultTask = RunOnMainThread(() => ExecuteAction(action, parsed));
-            var result = resultTask.GetAwaiter().GetResult();
+            var result = RunOnMainThreadBlocking(() => ExecuteAction(action, parsed));
             SendJson(response, EnsureStatus(result), pretty);
+        }
+        catch (MainThreadUnavailableException ex)
+        {
+            SendUnavailable(response, ex.Message, pretty);
         }
         catch (Exception ex)
         {
             SendError(response, 500, $"Action failed: {ex.Message}", pretty);
         }
     }
+}
+
+/// <summary>
+/// The game's main thread did not run the requested work: the queue was already backed up, or
+/// the wait timed out. Distinct from an action failure so handlers can answer 503 + retry
+/// instead of 500 - nothing was executed, and the same request is safe to send again.
+/// </summary>
+internal sealed class MainThreadUnavailableException : Exception
+{
+    internal MainThreadUnavailableException(string message) : base(message) { }
 }
