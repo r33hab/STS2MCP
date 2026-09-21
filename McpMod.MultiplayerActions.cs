@@ -40,7 +40,7 @@ public static partial class McpMod
             "choose_map_node" => ExecuteChooseMapNode(data),
             "choose_event_option" => ExecuteChooseEventOption(data),
             "advance_dialogue" => ExecuteAdvanceDialogue(),
-            "choose_rest_option" => ExecuteChooseRestOption(data),
+            "choose_rest_option" => ExecuteChooseRestOption(player, data),
             "shop_purchase" => ExecuteShopPurchase(player, data),
             "claim_reward" => ExecuteClaimReward(data),
             "select_card_reward" => ExecuteSelectCardReward(data),

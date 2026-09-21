@@ -1963,6 +1963,7 @@ public static partial class McpMod
     {
         var state = new Dictionary<string, object?>();
 
+        var uiRoom = NRestSiteRoom.Instance;
         var options = new List<Dictionary<string, object?>>();
         int index = 0;
         foreach (var opt in restSiteRoom.Options)
@@ -1973,13 +1974,16 @@ public static partial class McpMod
                 ["id"] = opt.OptionId,
                 ["name"] = SafeGetText(() => opt.Title),
                 ["description"] = SafeGetText(() => opt.Description),
-                ["is_enabled"] = opt.IsEnabled
+                ["is_enabled"] = opt.IsEnabled,
+                // A model option with no button is exactly the case where counting
+                // buttons positionally would have pressed the wrong option.
+                ["has_button"] = uiRoom != null && FindRestSiteButton(uiRoom, opt) != null
             });
             index++;
         }
         state["options"] = options;
 
-        var proceedButton = NRestSiteRoom.Instance?.ProceedButton;
+        var proceedButton = uiRoom?.ProceedButton;
         state["can_proceed"] = proceedButton?.IsEnabled ?? false;
 
         return state;

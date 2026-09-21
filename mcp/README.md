@@ -23,7 +23,7 @@
 | `rewards_pick_card(card_index)` | Rewards | Select a card from the card reward screen |
 | `rewards_skip_card()` | Rewards | Skip the card reward |
 | `map_choose_node(node_index)` | Map | Choose a map node to travel to |
-| `rest_choose_option(option_index)` | Rest Site | Choose a rest site option (rest, smith, etc.) |
+| `rest_choose_option(option_index, option_id)` | Rest Site | Choose a rest site option (rest, smith, dig, …). Prefer `option_id` from `rest_site.options[].id` |
 | `shop_purchase(item_index)` | Shop | Purchase an item from the shop |
 | `event_choose_option(option_index)` | Event | Choose an event option (including Proceed) |
 | `event_advance_dialogue()` | Event | Advance ancient event dialogue |
