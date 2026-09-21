@@ -55,8 +55,13 @@ curl -s http://localhost:15526/
 A successful response looks like:
 
 ```json
-{"message": "Hello from STS2 MCP v0.3.4", "status": "ok"}
+{"message": "Hello from STS2 MCP v0.4.0+2de67cd", "status": "ok", "version": "0.4.0", "commit": "2de67cd", "schema_version": 1}
 ```
+
+`commit` is the git revision the mod was built from (`null` if the build could not determine one) —
+quote it when reporting a bug. `schema_version` changes only when an existing state field or action
+changes meaning or is removed; new fields and actions do not bump it. Every state payload carries the
+same three values as `mod_version`, `mod_commit` and `schema_version`.
 
 If you get "Connection refused", the mod is not loaded — check that mods are enabled in the game's settings.
 

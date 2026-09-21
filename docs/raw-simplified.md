@@ -2,6 +2,7 @@
 
 HTTP API on `localhost:15526`. No authentication.
 
+- `GET /` — health check; returns `{ message, status, version, commit, schema_version }`
 - `GET /api/v1/singleplayer` — read game state
 - `POST /api/v1/singleplayer` — perform action
 - `GET /api/v1/multiplayer` — read multiplayer state
@@ -28,6 +29,9 @@ responses. It has no effect on `format=markdown`.
 
 Every JSON response includes:
 - `state_type` — which screen the game is on (see below)
+- `mod_version` — mod version string, e.g. `0.4.0`
+- `mod_commit` — git commit the mod was built from, e.g. `2de67cd` (`2de67cd-dirty` for a build from an edited tree), `null` when the build could not determine one
+- `schema_version` — integer version of this contract. **Bumped only when an existing field or action changes meaning or is removed.** Added fields, actions, parameters and `state_type`s do not bump it, so feature-detect additions by presence and use `schema_version` only to notice a breaking change.
 - `run` — `{ act, floor, ascension }` (absent for `menu`)
 - `player` — full player state: character, HP, gold, relics, potions, `max_potion_slots` (belt capacity, grows with relics), and during combat: energy, hand, piles, orbs (absent for `menu`)
 

@@ -515,34 +515,30 @@ public static partial class McpMod
         var tutorialFtue = FindVisibleAcceptTutorialsFtue(root);
         if (tutorialFtue != null && IsFtueNodeActive(tutorialFtue))
         {
-            return new Dictionary<string, object?>
+            var state = NewStateResult("menu");
+            state["menu_screen"] = "tutorial_prompt";
+            state["message"] = "Enable Tutorials? Choose yes or no.";
+            state["options"] = new List<Dictionary<string, object?>>
             {
-                ["state_type"] = "menu",
-                ["menu_screen"] = "tutorial_prompt",
-                ["message"] = "Enable Tutorials? Choose yes or no.",
-                ["options"] = new List<Dictionary<string, object?>>
-                {
-                    new() { ["name"] = "no", ["enabled"] = true },
-                    new() { ["name"] = "yes", ["enabled"] = true }
-                }
+                new() { ["name"] = "no", ["enabled"] = true },
+                new() { ["name"] = "yes", ["enabled"] = true }
             };
+            return state;
         }
 
         var ftue = FindVisibleGenericFtue(root);
         if (ftue != null)
         {
             var canAdvance = FindFtueAdvanceButton(ftue) != null;
-            return new Dictionary<string, object?>
+            var state = NewStateResult("menu");
+            state["menu_screen"] = "tutorial";
+            state["message"] = "Tutorial popup active. Use advance to dismiss.";
+            state["options"] = new List<Dictionary<string, object?>>
             {
-                ["state_type"] = "menu",
-                ["menu_screen"] = "tutorial",
-                ["message"] = "Tutorial popup active. Use advance to dismiss.",
-                ["options"] = new List<Dictionary<string, object?>>
-                {
-                    new() { ["name"] = "advance", ["enabled"] = canAdvance },
-                    new() { ["name"] = "proceed", ["enabled"] = canAdvance }
-                }
+                new() { ["name"] = "advance", ["enabled"] = canAdvance },
+                new() { ["name"] = "proceed", ["enabled"] = canAdvance }
             };
+            return state;
         }
 
         var popup = BuildVisiblePopupState(root);
@@ -572,14 +568,12 @@ public static partial class McpMod
         if (stateOptions.Count == 0)
             return null;
 
-        return new Dictionary<string, object?>
-        {
-            ["state_type"] = "menu",
-            ["menu_screen"] = "popup",
-            ["message"] = popup != null ? GetVerticalPopupText(popup, "TitleLabel") ?? "Popup active." : "Popup active.",
-            ["body"] = popup != null ? GetVerticalPopupText(popup, "BodyLabel") : null,
-            ["options"] = stateOptions
-        };
+        var state = NewStateResult("menu");
+        state["menu_screen"] = "popup";
+        state["message"] = popup != null ? GetVerticalPopupText(popup, "TitleLabel") ?? "Popup active." : "Popup active.";
+        state["body"] = popup != null ? GetVerticalPopupText(popup, "BodyLabel") : null;
+        state["options"] = stateOptions;
+        return state;
     }
 
     private static MegaCrit.Sts2.Core.Nodes.Ftue.NAcceptTutorialsFtue? FindVisibleAcceptTutorialsFtue(Node root)

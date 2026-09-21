@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
+using System.Reflection;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -19,9 +20,61 @@ namespace STS2_MCP;
 [ModInitializer("Initialize")]
 public static partial class McpMod
 {
+    // Keep in step with <Version> in STS2_MCP.csproj and "version" in mod_manifest.json.
     public const string Version = "0.4.0";
+
+    /// <summary>
+    /// Version of the state/action contract, reported as `schema_version` on every payload.
+    ///
+    /// Bumped only when an existing field or action changes meaning or disappears - the cases
+    /// where a client that was written against the old shape is now wrong. Adding fields,
+    /// actions, parameters or state_types does not bump it, so clients can keep feature-detecting
+    /// additions by presence and use this only to notice a breaking change.
+    /// </summary>
+    public const int StateSchemaVersion = 1;
+
     public const int DefaultPort = 15526;
     private const string ConfigFileName = "STS2_MCP.conf";
+
+    private static string? _buildCommit;
+    private static bool _buildCommitResolved;
+
+    /// <summary>
+    /// The git revision this assembly was built from (the part after '+' in
+    /// InformationalVersion), or null when the build could not determine one.
+    /// Lets a bug report name the exact build rather than just "0.4.0".
+    /// </summary>
+    internal static string? BuildCommit
+    {
+        get
+        {
+            if (_buildCommitResolved)
+                return _buildCommit;
+
+            _buildCommitResolved = true;
+            try
+            {
+                var informational = typeof(McpMod).Assembly
+                    .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+                    ?.InformationalVersion;
+                int plus = informational?.IndexOf('+') ?? -1;
+                if (plus >= 0 && plus + 1 < informational!.Length)
+                    _buildCommit = informational[(plus + 1)..];
+            }
+            catch
+            {
+                // Reflection over assembly attributes can fail in a trimmed or odd host;
+                // an unknown commit is not worth failing a state read over.
+                _buildCommit = null;
+            }
+
+            return _buildCommit;
+        }
+    }
+
+    /// <summary>Version with the build commit appended when known: "0.4.0+abc1234".</summary>
+    internal static string VersionString =>
+        BuildCommit is { Length: > 0 } commit ? $"{Version}+{commit}" : Version;
 
     private static HttpListener? _listener;
     private static Thread? _serverThread;
@@ -116,7 +169,7 @@ public static partial class McpMod
             };
             _serverThread.Start();
 
-            GD.Print($"[STS2 MCP] v{Version} server started on http://localhost:{port}/");
+            GD.Print($"[STS2 MCP] v{VersionString} server started on http://localhost:{port}/");
         }
         catch (Exception ex)
         {
@@ -207,7 +260,16 @@ public static partial class McpMod
 
             if (path == "/")
             {
-                SendJson(response, new { message = $"Hello from STS2 MCP v{Version}", status = "ok" }, pretty);
+                // A dictionary, not an anonymous type: _jsonOptions drops null *properties*,
+                // and "commit" has to stay present (as null) for clients that read it blindly.
+                SendJson(response, new Dictionary<string, object?>
+                {
+                    ["message"] = $"Hello from STS2 MCP v{VersionString}",
+                    ["status"] = "ok",
+                    ["version"] = Version,
+                    ["commit"] = BuildCommit,
+                    ["schema_version"] = StateSchemaVersion
+                }, pretty);
             }
             else if (path == "/api/v1/singleplayer")
             {

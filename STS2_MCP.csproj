@@ -4,6 +4,12 @@
     <OutputType>Library</OutputType>
     <Nullable>enable</Nullable>
     <LangVersion>12.0</LangVersion>
+    <!-- Version lives in three places that must move together:
+         this property, McpMod.Version (McpMod.cs) and "version" in mod_manifest.json. -->
+    <Version>0.4.0</Version>
+    <!-- Puts the git revision after a '+' in InformationalVersion, which the mod reads back
+         at runtime to report mod_commit. Explicit because the default flipped between SDKs. -->
+    <IncludeSourceRevisionInInformationalVersion>true</IncludeSourceRevisionInInformationalVersion>
     <!-- Set your STS2 install path here, or pass as: dotnet build -p:STS2GameDir="..." -->
     <STS2GameDir Condition="'$(STS2GameDir)' == ''">D:\SteamLibrary\steamapps\common\Slay the Spire 2</STS2GameDir>
     <STS2GameDataDir Condition="'$(STS2GameDataDir)' == '' and '$(OS)' == 'Windows_NT'">$(STS2GameDir)/data_sts2_windows_x86_64</STS2GameDataDir>
@@ -12,6 +18,35 @@
     <!-- Linux fallback (original behavior) -->
     <STS2GameDataDir Condition="'$(STS2GameDataDir)' == '' and '$(OS)' != 'Windows_NT' and !$([System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform($([System.Runtime.InteropServices.OSPlatform]::OSX)))">$(STS2GameDir)/data_sts2_linuxbsd_x86_64</STS2GameDataDir>
   </PropertyGroup>
+
+  <!-- Stamp the assembly with the commit it was built from, so a bug report can name the exact
+       build instead of "some 0.4.0". Everything here is best-effort: with no git on PATH or a
+       source drop that is not a repository, SourceRevisionId stays empty and the build still
+       succeeds - InformationalVersion is then the bare version. -->
+  <Target Name="SetSourceRevisionIdFromGit"
+          BeforeTargets="GetAssemblyVersion;GenerateAssemblyInfo;AddSourceRevisionToInformationalVersion"
+          Condition="'$(SourceRevisionId)' == ''">
+    <Exec Command="git rev-parse --short=7 HEAD"
+          WorkingDirectory="$(MSBuildProjectDirectory)"
+          ConsoleToMsBuild="true" ContinueOnError="true" IgnoreExitCode="true"
+          StandardOutputImportance="low">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_GitRevision" />
+      <Output TaskParameter="ExitCode" PropertyName="_GitRevisionExitCode" />
+    </Exec>
+    <!-- A build from an edited tree is not the commit it names; say so rather than mislead. -->
+    <Exec Command="git status --porcelain"
+          WorkingDirectory="$(MSBuildProjectDirectory)"
+          ConsoleToMsBuild="true" ContinueOnError="true" IgnoreExitCode="true"
+          StandardOutputImportance="low"
+          Condition="'$(_GitRevisionExitCode)' == '0' and '$(_GitRevision)' != ''">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_GitWorkingTreeStatus" />
+      <Output TaskParameter="ExitCode" PropertyName="_GitStatusExitCode" />
+    </Exec>
+    <PropertyGroup>
+      <SourceRevisionId Condition="'$(_GitRevisionExitCode)' == '0' and '$(_GitRevision)' != ''">$(_GitRevision.Trim())</SourceRevisionId>
+      <SourceRevisionId Condition="'$(SourceRevisionId)' != '' and '$(_GitStatusExitCode)' == '0' and '$(_GitWorkingTreeStatus)' != ''">$(SourceRevisionId)-dirty</SourceRevisionId>
+    </PropertyGroup>
+  </Target>
 
   <ItemGroup>
     <Reference Include="sts2">

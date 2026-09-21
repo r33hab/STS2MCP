@@ -18,6 +18,12 @@ public static partial class McpMod
         else
             sb.AppendLine($"# Game State: {stateType}");
         sb.AppendLine();
+        // So a pasted markdown state says which build produced it, without a second request.
+        string modVersion = state.TryGetValue("mod_version", out var mv) ? mv?.ToString() ?? Version : Version;
+        string modCommit = state.TryGetValue("mod_commit", out var mc) ? mc?.ToString() ?? "" : "";
+        string schema = state.TryGetValue("schema_version", out var sv) ? sv?.ToString() ?? "" : "";
+        sb.AppendLine($"mod {modVersion}{(modCommit.Length > 0 ? "+" + modCommit : "")}{(schema.Length > 0 ? " · schema " + schema : "")}");
+        sb.AppendLine();
 
         if (state.TryGetValue("run", out var runObj) && runObj is Dictionary<string, object?> run)
         {
