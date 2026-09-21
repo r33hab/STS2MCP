@@ -48,7 +48,11 @@ public static partial class McpMod
     private static string? SafeGetCardDescription(CardModel card, PileType pile = PileType.Hand)
     {
         try { return StripRichTextTags(card.GetDescriptionForPile(pile)).Replace("\n", " "); }
-        catch { return SafeGetText(() => card.Description)?.Replace("\n", " "); }
+        catch (Exception ex)
+        {
+            Warn("card.description", ex);
+            return SafeGetText(() => card.Description)?.Replace("\n", " ");
+        }
     }
 
     private static CardModel? SafeBuildUpgradedCardPreview(CardModel card)
@@ -64,8 +68,9 @@ public static partial class McpMod
             preview.UpgradeInternal();
             return preview;
         }
-        catch
+        catch (Exception ex)
         {
+            Warn("card.upgrade_preview", ex);
             return null;
         }
     }
@@ -81,7 +86,11 @@ public static partial class McpMod
             : null;
     }
 
-    internal static string? SafeGetText(Func<object?> getter)
+    // The caller's name stands in for a field name: this helper reads a few hundred
+    // different things per state and "text: NullReferenceException" alone names none of
+    // them. Warnings are de-duplicated, so the volume of calls costs at most one entry.
+    internal static string? SafeGetText(Func<object?> getter,
+        [CallerMemberName] string caller = "")
     {
         try
         {
@@ -92,7 +101,7 @@ public static partial class McpMod
                 return StripRichTextTags(locString.GetFormattedText());
             return result.ToString();
         }
-        catch { return null; }
+        catch (Exception ex) { Warn($"text in {caller}", ex); return null; }
     }
 
     internal static string StripRichTextTags(string text)
@@ -262,7 +271,7 @@ public static partial class McpMod
                 });
             }
         }
-        catch { }
+        catch (Exception ex) { Warn($"options.{label}", ex); }
     }
 
     internal static List<T> FindAll<T>(Node start) where T : Node
@@ -301,6 +310,9 @@ public static partial class McpMod
             foreach (var child in node.GetChildren())
                 FindAllRecursive(child, found);
         }
+        // Every `catch (ObjectDisposedException)` in this file's node walkers is left out
+        // of the state warnings on purpose: nodes are freed continuously while a scene
+        // transitions, so hitting a dead one is the normal reading, not a broken field.
         catch (ObjectDisposedException) { }
     }
 
@@ -313,7 +325,7 @@ public static partial class McpMod
     {
         object? model;
         try { model = tip.CanonicalModel; }
-        catch { return null; }
+        catch (Exception ex) { Warn("keywords.canonical_model", ex); return null; }
         if (model == null) return null;
 
         foreach (var propertyName in new[] { "SmartDescription", "DynamicDescription", "Description" })
@@ -330,7 +342,9 @@ public static partial class McpMod
                 if (!string.IsNullOrWhiteSpace(text))
                     return text;
             }
-            catch { /* try the next one */ }
+            // Left silent: this loop exists to try candidate property names until one
+            // works, so a throw on the way is a step in the search, not a lost field.
+            catch { }
         }
 
         return null;
@@ -386,10 +400,10 @@ public static partial class McpMod
 
                     result.Add(entry);
                 }
-                catch { /* skip individual tip on error */ }
+                catch (Exception ex) { Warn("keywords.tip", ex); }
             }
         }
-        catch { /* return partial results */ }
+        catch (Exception ex) { Warn("keywords", ex); }
         return result;
     }
 
