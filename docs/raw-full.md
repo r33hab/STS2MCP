@@ -1114,6 +1114,66 @@ game is not processing frames (scene load, hang, minimized or paused app). Nothi
 run, so the same request may be sent again once the game is responsive. Contrast with `500`, where
 the action ran and threw.
 
+### Waiting for the Game to Settle
+
+A POST returns as soon as the action has been dispatched on the main thread. Whether the animation,
+card resolution and redraw it started have finished is *not* in the response, so a client that acts
+on the reply is reading pre-resolution numbers — enemy HP before a multi-hit landed, a hand that has
+not been redrawn. The usual workaround is a GET poll loop on `is_resolving`; `"wait": true` moves
+that loop into the server, so one round trip both performs the action and returns the settled state.
+
+```json
+{ "action": "play_card", "card_uid": "STRIKE_IRONCLAD#1", "target": "NIBBIT_0", "wait": true }
+```
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `wait` | bool | `false` | Wait for the game to settle before answering. Truthy forms: `true`, `1`, `"1"`, `"true"`, `"yes"`, `"on"`. Also readable from the query string (`?wait=1`, or a bare `?wait`). |
+| `wait_timeout_ms` | int | `10000` | Upper bound on the wait, clamped to `500`–`30000`. |
+| `include_state` | bool | `true` when `wait` is set | Whether to embed the settled state. |
+
+Response, with the wait's own fields appended after the action's:
+
+```jsonc
+{
+  "status": "ok",
+  "message": "Playing 'Strike' targeting Nibbit",
+  "waited_ms": 431,
+  "polls": 6,
+  "settled": true,
+  "changed": true,
+  "state": { "state_type": "monster", "...": "..." }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `waited_ms` | Wall-clock duration of the wait. |
+| `polls` | Number of state reads performed. |
+| `settled` | `true` if the game came to rest; `false` means the timeout was reached and the state may still be mid-resolution. |
+| `changed` | Whether anything observable moved compared with the state read just before the action. `false` means the action was a no-op. |
+| `state` | The final state, identical in shape to `GET /api/v1/singleplayer`. Omitted when `include_state` is `false`, and when the wait could not read a state at all. |
+| `wait_error` | Present only when the wait itself failed (the main thread stopped answering, or the state could not be built). The action already ran, so this is not a `503`. |
+
+**The settle rule.** Every ~60 ms the server re-reads the state on the main thread and calls it
+settled when `is_resolving` is false and, for `monster` / `elite` / `boss`, `battle.is_play_phase`
+is true. It must look settled for **3 consecutive polls** (~180 ms) before the wait returns: a click
+only takes effect on the following frame, and between two queued actions the game looks idle for a
+single frame — one poll would routinely return a mid-resolution state. This mirrors the
+empirically tuned loop every operator client ends up writing.
+
+**The no-change rule.** A cheap fingerprint (state type, menu screen, floor, round, player HP /
+block / energy, the uids in hand, each enemy's HP and block, the number of options on screen) is
+taken just before the action and compared on every poll. If it has not moved within the first
+**3000 ms**, the wait stops and returns `settled: true, changed: false` rather than burning the
+whole timeout on an action the game ignored.
+
+The wait never runs when the action returned `"status": "error"`, and a state that cannot be built
+(it throws while a scene is swapping) counts as "not settled" and is simply polled again.
+
+This is a **singleplayer-only** feature: `POST /api/v1/multiplayer` ignores `wait`,
+`wait_timeout_ms` and `include_state`.
+
 ---
 
 ### `menu_select`

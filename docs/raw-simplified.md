@@ -82,6 +82,42 @@ that is either `"ok"` or `"error"`. A client only needs that one key:
 `error` is present if and only if `status` is `"error"`. GET responses return state payloads and
 are not covered by this contract (`GET /` is the exception and reports `"status": "ok"`).
 
+### Waiting for the Game to Settle
+
+By default a POST returns as soon as the action has been dispatched, so the animation, card
+resolution and redraw it triggers may still be running. Add `"wait": true` and the server does the
+settle loop for you and answers with the settled state — one round trip instead of a GET poll loop.
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `wait` | bool | `false` | Wait for the game to settle before answering. Also accepts `1`, `"1"`, `"true"`, or the query string `?wait=1`. |
+| `wait_timeout_ms` | int | `10000` | How long to wait, clamped to `500`–`30000`. |
+| `include_state` | bool | `true` when `wait` is set | Include the settled state in the response. |
+
+```json
+{ "action": "end_turn", "wait": true }
+```
+
+Extra response fields, appended after the action's own keys:
+
+| Field | Meaning |
+|---|---|
+| `waited_ms` | How long the wait took. |
+| `polls` | How many state reads it took. |
+| `settled` | `true` if the game came to rest, `false` on timeout. |
+| `changed` | `false` means nothing observable moved — the action was a no-op. |
+| `state` | The settled state, same shape as `GET /api/v1/singleplayer` (omitted when `include_state` is `false`). |
+| `wait_error` | Only present if the wait itself failed; the action still ran. |
+
+A state counts as settled when `is_resolving` is false and — in `monster` / `elite` / `boss` — the
+battle is back in its play phase, and that has held for 3 consecutive polls (~180 ms). One poll is
+not enough: a click takes effect a frame later, and the game looks idle for a frame between two
+queued actions. If the state has not changed at all within the first 3 s the wait stops early and
+returns `settled: true, changed: false`.
+
+Nothing is waited on when the action returned `"status": "error"`. Singleplayer only —
+`POST /api/v1/multiplayer` ignores these parameters.
+
 ### Errors
 
 | Status | Meaning |

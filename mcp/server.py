@@ -59,8 +59,20 @@ async def _get(params: dict | None = None) -> str:
     return r.text
 
 
-async def _post(body: dict) -> str:
-    r = await _get_client().post(_sp_url(), json=body)
+async def _post(body: dict, wait: bool = False) -> str:
+    """POST a singleplayer action.
+
+    With wait=True the mod holds the response until the game has settled and embeds the
+    settled state, so the caller does not need a GET poll loop. That makes the request
+    outlive the shared 15 s client timeout, hence the per-request override: the mod's own
+    settle timeout is 10 s on top of the 10 s main-thread timeout.
+    """
+    if not wait:
+        r = await _get_client().post(_sp_url(), json=body)
+    else:
+        r = await _get_client().post(
+            _sp_url(), json={**body, "wait": True}, timeout=httpx.Timeout(35)
+        )
     r.raise_for_status()
     return r.text
 
@@ -357,7 +369,7 @@ async def delete_profile(profile_id: int) -> str:
 
 
 @mcp.tool()
-async def use_potion(slot: int, target: str | None = None) -> str:
+async def use_potion(slot: int, target: str | None = None, wait: bool = False) -> str:
     """Use a potion from the player's potion slots.
 
     Works both during and outside of combat. Combat-only potions require an active battle.
@@ -369,12 +381,17 @@ async def use_potion(slot: int, target: str | None = None) -> str:
         target: Target enemy, as either its entity_id ("JAW_WORM_0") or its combat_id
             ("3"). Required for enemy-targeted potions unless exactly one enemy is
             alive, in which case it is chosen automatically.
+        wait: Hold the response until the game has settled (animations, card
+            resolution and the redraw finished) and return the settled state with it,
+            instead of answering as soon as the action was dispatched. Saves a
+            follow-up get_game_state(). The reply adds `settled`, `changed`,
+            `waited_ms`, `polls` and `state`.
     """
     body: dict = {"action": "use_potion", "slot": slot}
     if target is not None:
         body["target"] = target
     try:
-        return await _post(body)
+        return await _post(body, wait=wait)
     except Exception as e:
         return _handle_error(e)
 
@@ -413,14 +430,21 @@ async def discard_potion(slot: int) -> str:
 
 
 @mcp.tool()
-async def proceed_to_map() -> str:
+async def proceed_to_map(wait: bool = False) -> str:
     """Proceed from the current screen to the map.
 
     Works from: rewards screen, rest site, shop, fake merchant.
     Does NOT work for events — use event_choose_option() with the Proceed option's index.
+
+    Args:
+        wait: Hold the response until the game has settled (animations, card
+            resolution and the redraw finished) and return the settled state with it,
+            instead of answering as soon as the action was dispatched. Saves a
+            follow-up get_game_state(). The reply adds `settled`, `changed`,
+            `waited_ms`, `polls` and `state`.
     """
     try:
-        return await _post({"action": "proceed"})
+        return await _post({"action": "proceed"}, wait=wait)
     except Exception as e:
         return _handle_error(e)
 
@@ -435,6 +459,7 @@ async def combat_play_card(
     card_index: int | None = None,
     target: str | None = None,
     card_uid: str | None = None,
+    wait: bool = False,
 ) -> str:
     """[Combat] Play a card from the player's hand.
 
@@ -447,6 +472,11 @@ async def combat_play_card(
             card_index: it identifies the card instance itself and stays valid for
             the whole combat, so a multi-card plan does not need recomputing after
             every play.
+        wait: Hold the response until the game has settled (animations, card
+            resolution and the redraw finished) and return the settled state with it,
+            instead of answering as soon as the action was dispatched. Saves a
+            follow-up get_game_state(). The reply adds `settled`, `changed`,
+            `waited_ms`, `polls` and `state`.
 
     card_index is a position in the hand, so playing a card shifts the indices of
     everything behind it; re-read state between plays if you use it.
@@ -461,16 +491,24 @@ async def combat_play_card(
     if target is not None:
         body["target"] = target
     try:
-        return await _post(body)
+        return await _post(body, wait=wait)
     except Exception as e:
         return _handle_error(e)
 
 
 @mcp.tool()
-async def combat_end_turn() -> str:
-    """[Combat] End the player's current turn."""
+async def combat_end_turn(wait: bool = False) -> str:
+    """[Combat] End the player's current turn.
+
+    Args:
+        wait: Hold the response until the game has settled (animations, card
+            resolution and the redraw finished) and return the settled state with it,
+            instead of answering as soon as the action was dispatched. Saves a
+            follow-up get_game_state(). The reply adds `settled`, `changed`,
+            `waited_ms`, `polls` and `state`.
+    """
     try:
-        return await _post({"action": "end_turn"})
+        return await _post({"action": "end_turn"}, wait=wait)
     except Exception as e:
         return _handle_error(e)
 
