@@ -26,7 +26,19 @@ public static partial class McpMod
     private static HttpListener? _listener;
     private static Thread? _serverThread;
     private static readonly ConcurrentQueue<Action> _mainThreadQueue = new();
+    // Indentation was ~32% of a typical in-combat state response (12,069 -> 8,178 bytes).
+    // The main consumer is an LLM that pays per token, so compact is the default and
+    // ?pretty=1 opts back in. Two immutable instances: JsonSerializerOptions must not be
+    // mutated after first use, and requests are served concurrently on ThreadPool threads.
     internal static readonly JsonSerializerOptions _jsonOptions = new()
+    {
+        WriteIndented = false,
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
+    };
+
+    internal static readonly JsonSerializerOptions _jsonOptionsPretty = new()
     {
         WriteIndented = true,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
@@ -48,7 +60,8 @@ public static partial class McpMod
                 try
                 {
                     var defaultConfig = new Dictionary<string, object> { ["port"] = DefaultPort };
-                    string json = JsonSerializer.Serialize(defaultConfig, _jsonOptions);
+                    // The config file is edited by hand, so it stays indented regardless of the API default.
+                    string json = JsonSerializer.Serialize(defaultConfig, _jsonOptionsPretty);
                     File.WriteAllText(configPath, json);
                     GD.Print($"[STS2 MCP] Created default config at {configPath}");
                 }
@@ -178,6 +191,7 @@ public static partial class McpMod
         {
             var request = context.Request;
             var response = context.Response;
+            bool pretty = WantsPretty(request);
             response.Headers.Add("Access-Control-Allow-Origin", "*");
             response.Headers.Add("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
             response.Headers.Add("Access-Control-Allow-Headers", "Content-Type");
@@ -193,7 +207,7 @@ public static partial class McpMod
 
             if (path == "/")
             {
-                SendJson(response, new { message = $"Hello from STS2 MCP v{Version}", status = "ok" });
+                SendJson(response, new { message = $"Hello from STS2 MCP v{Version}", status = "ok" }, pretty);
             }
             else if (path == "/api/v1/singleplayer")
             {
@@ -202,7 +216,7 @@ public static partial class McpMod
                 if (IsMultiplayerRun())
                 {
                     SendError(response, 409,
-                        "Multiplayer run is active. Use /api/v1/multiplayer instead.");
+                        "Multiplayer run is active. Use /api/v1/multiplayer instead.", pretty);
                     return;
                 }
 
@@ -211,7 +225,7 @@ public static partial class McpMod
                 else if (request.HttpMethod == "POST")
                     HandlePostAction(request, response);
                 else
-                    SendError(response, 405, "Method not allowed");
+                    SendError(response, 405, "Method not allowed", pretty);
             }
             else if (path == "/api/v1/multiplayer")
             {
@@ -219,7 +233,7 @@ public static partial class McpMod
                 if (!IsMultiplayerRun())
                 {
                     SendError(response, 409,
-                        "Not in a multiplayer run. Use /api/v1/singleplayer instead.");
+                        "Not in a multiplayer run. Use /api/v1/singleplayer instead.", pretty);
                     return;
                 }
 
@@ -228,48 +242,49 @@ public static partial class McpMod
                 else if (request.HttpMethod == "POST")
                     HandlePostMultiplayerAction(request, response);
                 else
-                    SendError(response, 405, "Method not allowed");
+                    SendError(response, 405, "Method not allowed", pretty);
             }
             else if (path == "/api/v1/profiles")
             {
                 if (request.HttpMethod == "GET")
-                    HandleGetProfiles(response);
+                    HandleGetProfiles(request, response);
                 else if (request.HttpMethod == "POST")
                     HandlePostProfiles(request, response);
                 else
-                    SendError(response, 405, "Method not allowed");
+                    SendError(response, 405, "Method not allowed", pretty);
             }
             else if (path == "/api/v1/profile")
             {
                 if (request.HttpMethod == "GET")
-                    HandleGetProfile(response);
+                    HandleGetProfile(request, response);
                 else
-                    SendError(response, 405, "Method not allowed");
+                    SendError(response, 405, "Method not allowed", pretty);
             }
             else if (path == "/api/v1/compendium")
             {
                 if (request.HttpMethod == "GET")
-                    HandleGetCompendium(response);
+                    HandleGetCompendium(request, response);
                 else
-                    SendError(response, 405, "Method not allowed");
+                    SendError(response, 405, "Method not allowed", pretty);
             }
             else if (path == "/api/v1/wiki")
             {
                 if (request.HttpMethod == "GET")
                     HandleGetWiki(request, response);
                 else
-                    SendError(response, 405, "Method not allowed");
+                    SendError(response, 405, "Method not allowed", pretty);
             }
             else
             {
-                SendError(response, 404, "Not found");
+                SendError(response, 404, "Not found", pretty);
             }
         }
         catch (Exception ex)
         {
             try
             {
-                SendError(context.Response, 500, $"Internal error: {ex.Message}");
+                SendError(context.Response, 500, $"Internal error: {ex.Message}",
+                    WantsPretty(context.Request));
             }
             catch { /* response may already be closed */ }
         }
@@ -291,6 +306,7 @@ public static partial class McpMod
     private static void HandleGetMultiplayerState(HttpListenerRequest request, HttpListenerResponse response)
     {
         string format = request.QueryString["format"] ?? "json";
+        bool pretty = WantsPretty(request);
 
         try
         {
@@ -304,7 +320,7 @@ public static partial class McpMod
             }
             else
             {
-                SendJson(response, state);
+                SendJson(response, state, pretty);
             }
         }
         catch (Exception ex)
@@ -318,7 +334,7 @@ public static partial class McpMod
                     ["error"] = $"Failed to read multiplayer game state: {ex.Message}",
                     ["exception_type"] = ex.GetType().FullName,
                     ["stack_trace"] = ex.StackTrace
-                });
+                }, pretty);
             }
             catch { /* response may be unusable */ }
         }
@@ -326,6 +342,7 @@ public static partial class McpMod
 
     private static void HandlePostMultiplayerAction(HttpListenerRequest request, HttpListenerResponse response)
     {
+        bool pretty = WantsPretty(request);
         string body;
         using (var reader = new StreamReader(request.InputStream, request.ContentEncoding))
             body = reader.ReadToEnd();
@@ -337,13 +354,13 @@ public static partial class McpMod
         }
         catch
         {
-            SendError(response, 400, "Invalid JSON");
+            SendError(response, 400, "Invalid JSON", pretty);
             return;
         }
 
         if (parsed == null || !parsed.TryGetValue("action", out var actionElem))
         {
-            SendError(response, 400, "Missing 'action' field");
+            SendError(response, 400, "Missing 'action' field", pretty);
             return;
         }
 
@@ -362,11 +379,11 @@ public static partial class McpMod
                 int? ascension = ReadOptionalInt(parsed, "ascension");
                 var resultTask = RunOnMainThread(() => ExecuteMenuSelect(option, seed, ascension));
                 var result = resultTask.GetAwaiter().GetResult();
-                SendJson(response, result);
+                SendJson(response, result, pretty);
             }
             catch (Exception ex)
             {
-                SendError(response, 500, $"Menu action failed: {ex.Message}");
+                SendError(response, 500, $"Menu action failed: {ex.Message}", pretty);
             }
             return;
         }
@@ -375,11 +392,11 @@ public static partial class McpMod
         {
             var resultTask = RunOnMainThread(() => ExecuteMultiplayerAction(action, parsed));
             var result = resultTask.GetAwaiter().GetResult();
-            SendJson(response, result);
+            SendJson(response, result, pretty);
         }
         catch (Exception ex)
         {
-            SendError(response, 500, $"Multiplayer action failed: {ex.Message}");
+            SendError(response, 500, $"Multiplayer action failed: {ex.Message}", pretty);
         }
     }
 
@@ -397,6 +414,7 @@ public static partial class McpMod
     private static void HandleGetState(HttpListenerRequest request, HttpListenerResponse response)
     {
         string format = request.QueryString["format"] ?? "json";
+        bool pretty = WantsPretty(request);
 
         try
         {
@@ -412,12 +430,12 @@ public static partial class McpMod
                 catch (Exception ex)
                 {
                     GD.PrintErr($"[STS2 MCP] FormatAsMarkdown failed, returning JSON: {ex}");
-                    SendJson(response, state);
+                    SendJson(response, state, pretty);
                 }
             }
             else
             {
-                SendJson(response, state);
+                SendJson(response, state, pretty);
             }
         }
         catch (Exception ex)
@@ -431,7 +449,7 @@ public static partial class McpMod
                     ["error"] = $"Failed to read game state: {ex.Message}",
                     ["exception_type"] = ex.GetType().FullName,
                     ["stack_trace"] = ex.StackTrace
-                });
+                }, pretty);
             }
             catch { /* response may be unusable */ }
         }
@@ -439,6 +457,7 @@ public static partial class McpMod
 
     private static void HandlePostAction(HttpListenerRequest request, HttpListenerResponse response)
     {
+        bool pretty = WantsPretty(request);
         string body;
         using (var reader = new StreamReader(request.InputStream, request.ContentEncoding))
             body = reader.ReadToEnd();
@@ -450,13 +469,13 @@ public static partial class McpMod
         }
         catch
         {
-            SendError(response, 400, "Invalid JSON");
+            SendError(response, 400, "Invalid JSON", pretty);
             return;
         }
 
         if (parsed == null || !parsed.TryGetValue("action", out var actionElem))
         {
-            SendError(response, 400, "Missing 'action' field");
+            SendError(response, 400, "Missing 'action' field", pretty);
             return;
         }
 
@@ -468,11 +487,11 @@ public static partial class McpMod
             try
             {
                 var resultTask = RunOnMainThread(() => ExecuteTimelineRevealEpochs());
-                SendJson(response, resultTask.GetAwaiter().GetResult());
+                SendJson(response, resultTask.GetAwaiter().GetResult(), pretty);
             }
             catch (Exception ex)
             {
-                SendError(response, 500, $"Timeline reveal failed: {ex.Message}");
+                SendError(response, 500, $"Timeline reveal failed: {ex.Message}", pretty);
             }
             return;
         }
@@ -487,11 +506,11 @@ public static partial class McpMod
                 int? ascension = ReadOptionalInt(parsed, "ascension");
                 var resultTask = RunOnMainThread(() => ExecuteMenuSelect(option, seed, ascension));
                 var result = resultTask.GetAwaiter().GetResult();
-                SendJson(response, result);
+                SendJson(response, result, pretty);
             }
             catch (Exception ex)
             {
-                SendError(response, 500, $"Menu action failed: {ex.Message}");
+                SendError(response, 500, $"Menu action failed: {ex.Message}", pretty);
             }
             return;
         }
@@ -500,11 +519,11 @@ public static partial class McpMod
         {
             var resultTask = RunOnMainThread(() => ExecuteAction(action, parsed));
             var result = resultTask.GetAwaiter().GetResult();
-            SendJson(response, result);
+            SendJson(response, result, pretty);
         }
         catch (Exception ex)
         {
-            SendError(response, 500, $"Action failed: {ex.Message}");
+            SendError(response, 500, $"Action failed: {ex.Message}", pretty);
         }
     }
 }

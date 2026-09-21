@@ -15,34 +15,37 @@ namespace STS2_MCP;
 
 public static partial class McpMod
 {
-    private static void HandleGetProfile(HttpListenerResponse response)
+    private static void HandleGetProfile(HttpListenerRequest request, HttpListenerResponse response)
     {
+        bool pretty = WantsPretty(request);
         try
         {
             var dataTask = RunOnMainThread(BuildProfile);
-            SendJson(response, dataTask.GetAwaiter().GetResult());
+            SendJson(response, dataTask.GetAwaiter().GetResult(), pretty);
         }
         catch (Exception ex)
         {
-            SendError(response, 500, $"Failed to build profile: {ex.Message}");
+            SendError(response, 500, $"Failed to build profile: {ex.Message}", pretty);
         }
     }
 
-    private static void HandleGetProfiles(HttpListenerResponse response)
+    private static void HandleGetProfiles(HttpListenerRequest request, HttpListenerResponse response)
     {
+        bool pretty = WantsPretty(request);
         try
         {
             var dataTask = RunOnMainThread(BuildProfilesSummary);
-            SendJson(response, dataTask.GetAwaiter().GetResult());
+            SendJson(response, dataTask.GetAwaiter().GetResult(), pretty);
         }
         catch (Exception ex)
         {
-            SendError(response, 500, $"Failed to get profiles: {ex.Message}");
+            SendError(response, 500, $"Failed to get profiles: {ex.Message}", pretty);
         }
     }
 
     private static void HandlePostProfiles(HttpListenerRequest request, HttpListenerResponse response)
     {
+        bool pretty = WantsPretty(request);
         string body;
         using (var reader = new StreamReader(request.InputStream, request.ContentEncoding))
             body = reader.ReadToEnd();
@@ -54,13 +57,13 @@ public static partial class McpMod
         }
         catch
         {
-            SendError(response, 400, "Invalid JSON");
+            SendError(response, 400, "Invalid JSON", pretty);
             return;
         }
 
         if (parsed == null || !parsed.TryGetValue("action", out var actionElem))
         {
-            SendError(response, 400, "Missing 'action' field. Use: switch, delete");
+            SendError(response, 400, "Missing 'action' field. Use: switch, delete", pretty);
             return;
         }
 
@@ -72,11 +75,11 @@ public static partial class McpMod
         try
         {
             var resultTask = RunOnMainThread(() => ExecuteProfileAction(action, profileId));
-            SendJson(response, resultTask.GetAwaiter().GetResult());
+            SendJson(response, resultTask.GetAwaiter().GetResult(), pretty);
         }
         catch (Exception ex)
         {
-            SendError(response, 500, $"Profile action failed: {ex.Message}");
+            SendError(response, 500, $"Profile action failed: {ex.Message}", pretty);
         }
     }
 

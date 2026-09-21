@@ -16,9 +16,13 @@ Singleplayer and multiplayer endpoints are mutually exclusive (HTTP 409 if misma
 
 ## GET — Query Parameters
 
-| Parameter | Values             | Default | Description     |
-|-----------|--------------------|---------|-----------------|
-| `format`  | `json`, `markdown` | `json`  | Response format |
+| Parameter | Values                                        | Default | Description                                                     |
+|-----------|-----------------------------------------------|---------|-----------------------------------------------------------------|
+| `format`  | `json`, `markdown`                            | `json`  | Response format                                                 |
+| `pretty`  | `1`, `true`, `yes` (or present with no value) | off     | Indent the JSON. Off by default — compact output is ~32% smaller |
+
+`pretty` applies to POST requests as well (e.g. `POST /api/v1/singleplayer?pretty=1`) and to error
+responses. It has no effect on `format=markdown`.
 
 ## GET — State Types
 

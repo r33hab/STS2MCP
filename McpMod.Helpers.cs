@@ -130,9 +130,36 @@ public static partial class McpMod
         return sb.ToString();
     }
 
-    internal static void SendJson(HttpListenerResponse response, object data)
+    // The preference is passed down from the request rather than kept in a thread-static or
+    // global flag: requests are served concurrently on ThreadPool threads.
+    internal static bool WantsPretty(HttpListenerRequest request)
     {
-        string json = JsonSerializer.Serialize(data, _jsonOptions);
+        var query = request.QueryString;
+        string? value = query["pretty"];
+        if (value == null)
+        {
+            // "?pretty" without "=" has no name, so NameValueCollection files it under the
+            // null key, joining several such parameters with commas.
+            string? valueless = query[null];
+            if (valueless == null)
+                return false;
+            foreach (string part in valueless.Split(','))
+            {
+                if (part.Trim().Equals("pretty", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+
+        return value.Length == 0
+            || value.Equals("1", StringComparison.Ordinal)
+            || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("yes", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static void SendJson(HttpListenerResponse response, object data, bool pretty = false)
+    {
+        string json = JsonSerializer.Serialize(data, pretty ? _jsonOptionsPretty : _jsonOptions);
         byte[] buffer = Encoding.UTF8.GetBytes(json);
         response.ContentType = "application/json; charset=utf-8";
         response.ContentLength64 = buffer.Length;
@@ -149,10 +176,11 @@ public static partial class McpMod
         response.Close();
     }
 
-    internal static void SendError(HttpListenerResponse response, int statusCode, string message)
+    internal static void SendError(
+        HttpListenerResponse response, int statusCode, string message, bool pretty = false)
     {
         response.StatusCode = statusCode;
-        SendJson(response, new Dictionary<string, object?> { ["error"] = message });
+        SendJson(response, new Dictionary<string, object?> { ["error"] = message }, pretty);
     }
 
     private static Dictionary<string, object?> Error(string message)
