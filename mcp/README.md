@@ -12,11 +12,11 @@
 | `list_profiles()` | Profiles | List profile slots and active slot |
 | `switch_profile(profile_id)` | Profiles | Switch to a profile slot through the game UI |
 | `delete_profile(profile_id)` | Profiles | Delete an inactive profile slot |
-| `use_potion(slot, target?)` | General | Use a potion (works in and out of combat) |
+| `use_potion(slot, target?, wait?)` | General | Use a potion (works in and out of combat) |
 | `discard_potion(slot)` | General | Discard a potion to free up the slot |
-| `proceed_to_map()` | General | Proceed from rewards/rest site/shop/treasure to the map |
-| `combat_play_card(card_index, target?)` | Combat | Play a card from hand |
-| `combat_end_turn()` | Combat | End the current turn |
+| `proceed_to_map(wait?)` | General | Proceed from rewards/rest site/shop/treasure to the map |
+| `combat_play_card(card_index, target?, card_uid?, wait?)` | Combat | Play a card from hand |
+| `combat_end_turn(wait?)` | Combat | End the current turn |
 | `combat_select_card(card_index)` | Combat Selection | Select a card from hand during exhaust/discard prompts |
 | `combat_confirm_selection()` | Combat Selection | Confirm the in-combat card selection |
 | `rewards_claim(reward_index)` | Rewards | Claim a reward from the post-combat screen |
@@ -39,6 +39,21 @@
 | `crystal_sphere_set_tool(tool)` | Crystal Sphere | Switch the active divination tool |
 | `crystal_sphere_click_cell(x, y)` | Crystal Sphere | Click a hidden cell in the grid |
 | `crystal_sphere_proceed()` | Crystal Sphere | Continue after the minigame finishes |
+
+### Waiting for the Game to Settle (`wait?`)
+
+`combat_play_card`, `combat_end_turn`, `use_potion` and `proceed_to_map` accept `wait=True`. The mod
+then holds the HTTP response until the game has settled — animations, card resolution and the redraw
+finished — and returns the settled state with it, replacing the usual "act, then poll
+`get_game_state` until `is_resolving` is false" loop with a single call.
+
+The reply gains `settled`, `changed`, `waited_ms`, `polls` and `state` (the same payload
+`get_game_state(format="json")` would return). `changed: false` means the action moved nothing
+observable; `settled: false` means the wait timed out and the state may still be mid-resolution.
+
+These are the hot paths, so only they expose it as a tool parameter; every other singleplayer action
+still accepts `"wait": true` (plus `wait_timeout_ms` and `include_state`) over raw HTTP. Multiplayer
+ignores it.
 
 ### Profile Tools
 
