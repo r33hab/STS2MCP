@@ -12,6 +12,7 @@ using MegaCrit.Sts2.Core.Nodes.Relics;
 using MegaCrit.Sts2.Core.Nodes.Screens.Overlays;
 using MegaCrit.Sts2.Core.Nodes.Screens.TreasureRoomRelic;
 using MegaCrit.Sts2.Core.Entities.Merchant;
+using MegaCrit.Sts2.Core.Entities.RestSite;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Models.Events;
 using MegaCrit.Sts2.Core.Nodes.Events;
@@ -70,7 +71,7 @@ public static partial class McpMod
             "choose_map_node" => ExecuteChooseMapNode(data),
             "choose_event_option" => ExecuteChooseEventOption(data),
             "advance_dialogue" => ExecuteAdvanceDialogue(),
-            "choose_rest_option" => ExecuteChooseRestOption(data),
+            "choose_rest_option" => ExecuteChooseRestOption(player, data),
             "shop_purchase" => ExecuteShopPurchase(player, data),
             "claim_reward" => ExecuteClaimReward(data),
             "select_card_reward" => ExecuteSelectCardReward(data),
@@ -587,33 +588,103 @@ public static partial class McpMod
         };
     }
 
-    private static Dictionary<string, object?> ExecuteChooseRestOption(Dictionary<string, JsonElement> data)
+    private static Dictionary<string, object?> ExecuteChooseRestOption(Player player, Dictionary<string, JsonElement> data)
     {
-        if (!TryGetIntParam(data, out int index, "index", "option_index"))
-            return MissingIntParam("rest site option index", "index", "option_index");
+        if (player.RunState.CurrentRoom is not RestSiteRoom restSiteRoom)
+            return Error("Not at a rest site");
 
-        var restRoom = NRestSiteRoom.Instance;
-        if (restRoom == null)
+        var uiRoom = NRestSiteRoom.Instance;
+        if (uiRoom == null)
             return Error("Rest site room is not open");
 
-        var buttons = FindAll<NRestSiteButton>(restRoom);
-
-        if (buttons.Count == 0)
+        // Resolve against the model list, which is what the state's options[].index counts.
+        var options = restSiteRoom.Options.ToList();
+        if (options.Count == 0)
             return Error("No rest site options available");
-        if (index < 0 || index >= buttons.Count)
-            return Error($"Rest option index {index} out of range ({buttons.Count} options)");
 
-        var button = buttons[index];
-        if (!button.Option.IsEnabled)
-            return Error($"Rest option {index} ({button.Option.OptionId}) is disabled");
-        string optionName = SafeGetText(() => button.Option.Title) ?? button.Option.OptionId;
+        string? optionId = TryReadStringParam(data, "option_id", "id", "option");
+        bool hasIndex = TryGetIntParam(data, out int index, "index", "option_index");
+
+        if (optionId != null)
+        {
+            int found = options.FindIndex(o =>
+                string.Equals(o.OptionId, optionId, System.StringComparison.OrdinalIgnoreCase));
+            if (found < 0)
+                return Error($"No rest option '{optionId}' at this rest site. Available: {DescribeRestOptions(options, uiRoom)}");
+            // A caller that sends both is working from a stale read if they disagree;
+            // picking one silently is how you heal when you meant to smith.
+            if (hasIndex && index != found)
+                return Error(
+                    $"option_id '{optionId}' is index {found}, but index {index} was also given. "
+                    + $"Send one of them. Available: {DescribeRestOptions(options, uiRoom)}");
+            index = found;
+        }
+        else
+        {
+            if (!hasIndex)
+                return Error(
+                    "Missing rest site option selector. Provide 'option_id' (preferred; 'id'/'option' also accepted) "
+                    + $"or 'index' ('option_index'). Available: {DescribeRestOptions(options, uiRoom)}");
+            if (index < 0 || index >= options.Count)
+                return Error($"Rest option index {index} out of range ({options.Count} options). Available: {DescribeRestOptions(options, uiRoom)}");
+        }
+
+        var option = options[index];
+        if (!option.IsEnabled)
+            return Error($"Rest option [{index}] {option.OptionId} is disabled. Available: {DescribeRestOptions(options, uiRoom)}");
+
+        var button = FindRestSiteButton(uiRoom, option);
+        if (button == null)
+            return Error(
+                $"Rest option [{index}] {option.OptionId} has no button on screen right now; re-read state. "
+                + $"Available: {DescribeRestOptions(options, uiRoom)}");
+
+        string optionName = SafeGetText(() => option.Title) ?? option.OptionId;
         button.ForceClick();
 
         return new Dictionary<string, object?>
         {
             ["status"] = "ok",
-            ["message"] = $"Selecting rest site option: {optionName}"
+            ["message"] = $"Selecting rest site option: {optionName}",
+            ["option_id"] = option.OptionId,
+            ["index"] = index
         };
+    }
+
+    private static string DescribeRestOptions(List<RestSiteOption> options, NRestSiteRoom uiRoom)
+        => string.Join(", ", options.Select((o, i) =>
+            $"[{i}] {o.OptionId} ({(SafeGetBool(() => o.IsEnabled) == true ? "enabled" : "disabled")}"
+            + $"{(FindRestSiteButton(uiRoom, o) == null ? ", no button on screen" : "")})"));
+
+    /// <summary>
+    /// Finds the on-screen button that belongs to a specific rest site option.
+    /// Deliberately never falls back to positional indexing: the scene-tree order of
+    /// NRestSiteButton is not the order of RestSiteRoom.Options, so counting buttons
+    /// presses a different option - and still reports success - as soon as a relic adds
+    /// an option (Shovel, Girya, the Byrdonis egg) or a disabled one is not rendered.
+    /// </summary>
+    internal static NRestSiteButton? FindRestSiteButton(NRestSiteRoom uiRoom, RestSiteOption option)
+    {
+        try
+        {
+            var button = uiRoom.GetButtonForOption(option);
+            if (button != null)
+                return button;
+        }
+        catch { /* game-side lookup is best effort; fall through to the identity scan */ }
+
+        try
+        {
+            // RestSiteOption overrides Equals/==, so this is identity by model, not by position.
+            foreach (var candidate in FindAll<NRestSiteButton>(uiRoom))
+            {
+                if (candidate.Option == option)
+                    return candidate;
+            }
+        }
+        catch { /* a button mid-teardown can throw on .Option */ }
+
+        return null;
     }
 
     private static Dictionary<string, object?> ExecuteShopPurchase(Player player, Dictionary<string, JsonElement> data)

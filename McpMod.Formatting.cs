@@ -573,7 +573,12 @@ public static partial class McpMod
             foreach (var opt in options)
             {
                 string enabled = opt["is_enabled"] is true ? "" : " (DISABLED)";
-                sb.AppendLine($"- [{opt["index"]}] **{opt["name"]}**{enabled} - {opt["description"]}");
+                // Only worth printing when it is false - a model option with no button is
+                // the mismatch that used to make choose_rest_option press the wrong thing.
+                string noButton = opt.TryGetValue("has_button", out var hb) && hb is false
+                    ? " (no button on screen)"
+                    : "";
+                sb.AppendLine($"- [{opt["index"]}] `{opt["id"]}` **{opt["name"]}**{enabled}{noButton} - {opt["description"]}");
             }
             sb.AppendLine();
         }

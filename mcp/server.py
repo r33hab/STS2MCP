@@ -598,14 +598,27 @@ async def map_choose_node(node_index: int) -> str:
 
 
 @mcp.tool()
-async def rest_choose_option(option_index: int) -> str:
-    """[Rest Site] Choose a rest site option (rest, smith, etc.).
+async def rest_choose_option(
+    option_index: int | None = None,
+    option_id: str | None = None,
+) -> str:
+    """[Rest Site] Choose a rest site option (rest, smith, dig, etc.).
+
+    Prefer option_id: relics add options (Shovel's DIG, Girya, the Byrdonis egg),
+    so the id says what you meant while a bare index is only meaningful against
+    the state read you took it from.
 
     Args:
-        option_index: 0-based index of the option from the rest site state.
+        option_id: The id from rest_site.options[].id (e.g. "HEAL", "SMITH", "DIG").
+        option_index: 0-based rest_site.options[].index, if you have no id.
     """
+    payload: dict = {"action": "choose_rest_option"}
+    if option_id is not None:
+        payload["option_id"] = option_id
+    elif option_index is not None:
+        payload["index"] = option_index
     try:
-        return await _post({"action": "choose_rest_option", "index": option_index})
+        return await _post(payload)
     except Exception as e:
         return _handle_error(e)
 

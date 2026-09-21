@@ -556,10 +556,12 @@ Pick one card to add to your deck. Appears after claiming a card reward, or dire
     "options": [
       {
         "index": 0,
-        "id": "rest",
+        "id": "HEAL",
         "name": "Rest",
         "description": "Heal 30% of max HP.",
-        "is_enabled": true
+        "is_enabled": true,
+        "has_button": true   // false = the option exists in the run model but no
+                             // button is drawn; choose_rest_option refuses it
       }
     ],
     "can_proceed": false
@@ -1243,12 +1245,25 @@ Call repeatedly until `in_dialogue` becomes `false` and event options appear.
 Choose a rest site option (rest, smith, etc.).
 
 ```json
-{ "action": "choose_rest_option", "index": 0 }
+{ "action": "choose_rest_option", "option_id": "SMITH" }
 ```
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
-| `index` | int | Yes | 0-based index matching the option's `index` from state (disabled options return an error) |
+| `option_id` | string | One of the two | Matches the option's `id` from state, case-insensitively (`HEAL`, `SMITH`, `DIG`, …). Aliases: `id`, `option`. **Preferred** |
+| `index` | int | One of the two | 0-based index matching the option's `index` from state. Alias: `option_index` |
+
+The option is resolved in `RestSiteRoom.Options` (the same list the state numbers) and the
+button is then looked up from that option, so the on-screen order of the buttons cannot make
+this press a different option than the one asked for. Disabled options, unknown ids, and an
+`option_id` that disagrees with a supplied `index` all return an error listing every option as
+`[index] id (enabled/disabled)`.
+
+Success adds the `option_id` and `index` of what was clicked:
+
+```json
+{ "status": "ok", "message": "Selecting rest site option: Smith", "option_id": "SMITH", "index": 1 }
+```
 
 ### `shop_purchase`
 

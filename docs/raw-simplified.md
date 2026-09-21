@@ -168,8 +168,12 @@ Each offered card with an upgrade left carries `upgrade_preview`, so the upgrade
 
 | Action | Parameters | When to Use |
 |---|---|---|
-| `choose_rest_option` | `index`: int | Choose rest, smith, or other option. |
+| `choose_rest_option` | `option_id`: str (aliases `id`, `option`) — **preferred**; or `index`: int (alias `option_index`) | Choose rest, smith, or another option. `option_id` matches `rest_site.options[].id` case-insensitively (`HEAL`, `SMITH`, `DIG`, …). `index` is `rest_site.options[].index`, i.e. the position in the game's option list — *not* the on-screen button order. Both are resolved to the same model option and must agree if both are sent. Disabled options are refused; errors list every option as `[index] id (enabled/disabled)`. Replies with `option_id` and `index` of what was clicked. |
 | `proceed` | _(none)_ | Leave the rest site. |
+
+`rest_site.options[]` carries `index`, `id`, `name`, `description`, `is_enabled` and `has_button`
+(false when the option exists in the run model but no button is drawn yet — markdown appends
+`(no button on screen)` in that case, and `choose_rest_option` refuses it instead of pressing a neighbour).
 
 ### Shop (`shop`)
 
