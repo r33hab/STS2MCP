@@ -41,6 +41,7 @@ using MegaCrit.Sts2.Core.Nodes.Screens.GameOverScreen;
 using MegaCrit.Sts2.Core.Nodes.Screens.Timeline;
 using MegaCrit.Sts2.Core.Nodes.Screens.Timeline.UnlockScreens;
 using MegaCrit.Sts2.Core.Nodes.Screens.ProfileScreen;
+using MegaCrit.Sts2.Core.Nodes.Screens.Settings;
 using Godot;
 
 namespace STS2_MCP;
@@ -1735,6 +1736,16 @@ public static partial class McpMod
         if (popupButtonOptions.Count > 0)
             return ExecutePopupOption(popupButtonOptions, option);
 
+        // Settings screen - checked before every screen below, and in particular before
+        // the main-menu branch, which is gated on NMainMenu and so never runs during a
+        // run. Without this the API could open settings ('settings' on the main menu, or
+        // the pause menu in a run) and had no way back out.
+        var settingsScreen = FindFirst<NSettingsScreen>(tree.Root);
+        if (settingsScreen != null && IsNodeVisible(settingsScreen))
+        {
+            return ExecuteSettingsScreenMenuOption(settingsScreen, option);
+        }
+
         // Timeline screen - advance through epoch reveals.
         var timelineScreen = FindFirst<NTimelineScreen>(tree.Root);
         if (timelineScreen != null && IsNodeVisible(timelineScreen))
@@ -2005,6 +2016,48 @@ public static partial class McpMod
             return ExecuteProfileAction("switch", profileId);
 
         return Error($"Unknown profile select option: {option}. Use: profile_1, profile_2, profile_3, back");
+    }
+
+    /// <summary>
+    /// Only 'back' is offered. Changing a setting (tabs, tickboxes, sliders) is
+    /// deliberately not implemented - the bug being fixed is that the API could enter
+    /// this screen and not leave it.
+    /// </summary>
+    private static Dictionary<string, object?> ExecuteSettingsScreenMenuOption(
+        NSettingsScreen settingsScreen,
+        string option)
+    {
+        var normalized = option.ToLowerInvariant();
+        if (normalized != "back" && normalized != "close" && normalized != "resume")
+            return Error($"Unknown settings option: {option}. Use: back");
+
+        var backButton = FindSettingsBackButton(settingsScreen);
+        if (backButton != null && backButton.IsEnabled && IsNodeVisible(backButton))
+        {
+            backButton.ForceClick();
+            return new Dictionary<string, object?> { ["status"] = "ok", ["message"] = "Left the settings screen" };
+        }
+
+        // The back button is hidden or disabled while the submenu stack animates, which
+        // would otherwise leave the caller stuck on a screen with no other exit. Popping
+        // the stack is what the button itself does, so this lands in the same place.
+        try
+        {
+            var stack = GetInstanceFieldValue(settingsScreen, "_stack");
+            var popMethod = stack?.GetType().GetMethod("Pop");
+            if (stack != null && popMethod != null)
+            {
+                popMethod.Invoke(stack, null);
+                return new Dictionary<string, object?>
+                {
+                    ["status"] = "ok",
+                    ["message"] = "Left the settings screen (popped the submenu stack)"
+                };
+            }
+        }
+        catch { /* fall through to the error below */ }
+
+        return Error("Settings screen is open but neither its back button nor its submenu stack could close it");
     }
 
     private static Dictionary<string, object?> ExecuteJoinScreenMenuOption(

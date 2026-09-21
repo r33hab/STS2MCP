@@ -39,7 +39,7 @@ Every card object carries `is_upgraded`, `is_upgradable`, `upgrade_level` and `m
 
 | `state_type` | Screen | Available Actions |
 |---|---|---|
-| `menu` | Main menu, menu submenu (incl. multiplayer host/join/load lobby), character select, or a blocking FTUE/tutorial/popup that can also appear mid-run | `menu_select` |
+| `menu` | Main menu, menu submenu (incl. multiplayer host/join/load lobby), character select, `menu_screen: settings`, or a blocking FTUE/tutorial/popup that can also appear mid-run | `menu_select` |
 | `unknown` | Unrecognized room or null state | None |
 | `monster` / `elite` / `boss` | In combat | `play_card`, `use_potion`, `end_turn` |
 | `hand_select` | In-combat card selection (exhaust, discard, upgrade) | `combat_select_card`, `combat_confirm_selection` |
@@ -60,6 +60,10 @@ Every card object carries `is_upgraded`, `is_upgradable`, `upgrade_level` and `m
 
 **Note:** `use_potion` and `discard_potion` work during any state where potions are accessible (combat, map, events, etc.).
 
+**Note:** the settings screen is reported as `state_type: menu`, `menu_screen: "settings"` wherever it is
+open, with `in_run: true` when a run is paused underneath (`run` and `player` are still included there) and
+`in_run: false` on the main menu. Its only option is `back`; changing settings values is not exposed.
+
 ## POST — Actions
 
 All POST requests use JSON body with `"action"` field. All responses include `{ "status": "ok" | "error", "message": "..." }`.
@@ -68,7 +72,7 @@ All POST requests use JSON body with `"action"` field. All responses include `{ 
 
 | Action | Parameters | When to Use |
 |---|---|---|
-| `menu_select` | `option`: string, `seed`?: string, `ascension`?: int | Choose an advertised menu option. Options are case-insensitive. Submenus include `back` where visible, including `profile_select` options `profile_1`, `profile_2`, `profile_3`, and `back`. Blocking popups expose normalized button labels such as `ignore` or `back`. `game_over` supports `main_menu` only; `continue` returns an error. Supplying `seed` in unsupported contexts such as standard singleplayer character select returns an error and does not start a run. Timeline is no longer blocked when epochs are pending; use the `timeline_reveal_epochs` action to clear them. Multiplayer flow: on `multiplayer_join` use `refresh` / `back` / `join_<index>` / `join_<player_id>`. On `multiplayer_load_lobby` use `confirm` (or `embark`) to ready up, `unready` to retract, `back` to leave. On `character_select` while in MP, an additional `unready` option becomes available after readying, plus a `lobby` block in state lists ascension, all_ready, and per-player roster. `ascension` sets the ascension level on character select (applied before `option`, so it can ride along with the character pick or with `confirm`, or be sent alone with an empty `option`); character select state reports the current `ascension`, the unlocked `max_ascension`, and `ascension_selectable`. |
+| `menu_select` | `option`: string, `seed`?: string, `ascension`?: int | Choose an advertised menu option. Options are case-insensitive. Submenus include `back` where visible, including `profile_select` options `profile_1`, `profile_2`, `profile_3`, and `back`. Blocking popups expose normalized button labels such as `ignore` or `back`. On `settings` (opened with `settings` from the main menu, or from the pause menu during a run) the only option is `back` (aliases `close`, `resume`), which leaves the screen and returns to whatever was underneath; settings values themselves cannot be changed through the API. `game_over` supports `main_menu` only; `continue` returns an error. Supplying `seed` in unsupported contexts such as standard singleplayer character select returns an error and does not start a run. Timeline is no longer blocked when epochs are pending; use the `timeline_reveal_epochs` action to clear them. Multiplayer flow: on `multiplayer_join` use `refresh` / `back` / `join_<index>` / `join_<player_id>`. On `multiplayer_load_lobby` use `confirm` (or `embark`) to ready up, `unready` to retract, `back` to leave. On `character_select` while in MP, an additional `unready` option becomes available after readying, plus a `lobby` block in state lists ascension, all_ready, and per-player roster. `ascension` sets the ascension level on character select (applied before `option`, so it can ride along with the character pick or with `confirm`, or be sent alone with an empty `option`); character select state reports the current `ascension`, the unlocked `max_ascension`, and `ascension_selectable`. |
 | `timeline_reveal_epochs` | (none) | Reveal every obtained-but-unrevealed epoch. A finished run leaves epochs obtained, and the main menu hides `singleplayer` until they are revealed. Call from the main menu and repeat until the response has `done: true`; `pending_epoch_ids` lists what is left. Opens the Timeline, reveals each pending epoch through the game's own reveal path (granting its unlocks and writing progress), then returns to the main menu. Works with no run in progress. |
 
 ### Profiles
