@@ -180,12 +180,32 @@ public static partial class McpMod
         HttpListenerResponse response, int statusCode, string message, bool pretty = false)
     {
         response.StatusCode = statusCode;
-        SendJson(response, new Dictionary<string, object?> { ["error"] = message }, pretty);
+        // "status" is carried here too so a client never has to branch on the HTTP code:
+        // transport-level failures (bad JSON, unknown route, wrong method) read exactly
+        // like the action-level failures produced by Error().
+        SendJson(response, new Dictionary<string, object?>
+        {
+            ["status"] = "error",
+            ["error"] = message
+        }, pretty);
     }
 
     private static Dictionary<string, object?> Error(string message)
     {
         return new Dictionary<string, object?> { ["status"] = "error", ["error"] = message };
+    }
+
+    /// <summary>
+    /// Last line of defence for the POST contract: every action result must carry
+    /// "status". A future action that forgets it would silently break clients that
+    /// branch on that key alone, so the value is derived here from the presence of
+    /// "error" rather than left missing.
+    /// </summary>
+    private static Dictionary<string, object?> EnsureStatus(Dictionary<string, object?> result)
+    {
+        if (!result.ContainsKey("status"))
+            result["status"] = result.ContainsKey("error") ? "error" : "ok";
+        return result;
     }
 
     private static object? GetInstanceFieldValue(object source, string fieldName)

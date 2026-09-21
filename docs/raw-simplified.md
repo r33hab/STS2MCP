@@ -68,7 +68,19 @@ open, with `in_run: true` when a run is paused underneath (`run` and `player` ar
 
 ## POST — Actions
 
-All POST requests use JSON body with `"action"` field. All responses include `{ "status": "ok" | "error", "message": "..." }`.
+All POST requests use a JSON body with an `"action"` field.
+
+**Response contract — one shape for every POST.** Every POST response body carries a `status` field
+that is either `"ok"` or `"error"`. A client only needs that one key:
+
+| Outcome | HTTP | Body |
+|---|---|---|
+| Success | 200 | `{ "status": "ok", "message": "...", ... }` |
+| Action failure (the action was understood but could not be performed) | 200 | `{ "status": "error", "error": "..." }` |
+| Transport failure (invalid JSON, missing `action`, unknown route, wrong method, wrong run mode, unhandled exception) | 4xx / 5xx | `{ "status": "error", "error": "..." }` |
+
+`error` is present if and only if `status` is `"error"`. GET responses return state payloads and
+are not covered by this contract (`GET /` is the exception and reports `"status": "ok"`).
 
 ### Menu / Game Over
 

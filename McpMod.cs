@@ -441,7 +441,7 @@ public static partial class McpMod
                 int? ascension = ReadOptionalInt(parsed, "ascension");
                 var resultTask = RunOnMainThread(() => ExecuteMenuSelect(option, seed, ascension));
                 var result = resultTask.GetAwaiter().GetResult();
-                SendJson(response, result, pretty);
+                SendJson(response, EnsureStatus(result), pretty);
             }
             catch (Exception ex)
             {
@@ -454,7 +454,7 @@ public static partial class McpMod
         {
             var resultTask = RunOnMainThread(() => ExecuteMultiplayerAction(action, parsed));
             var result = resultTask.GetAwaiter().GetResult();
-            SendJson(response, result, pretty);
+            SendJson(response, EnsureStatus(result), pretty);
         }
         catch (Exception ex)
         {
@@ -549,7 +549,7 @@ public static partial class McpMod
             try
             {
                 var resultTask = RunOnMainThread(() => ExecuteTimelineRevealEpochs());
-                SendJson(response, resultTask.GetAwaiter().GetResult(), pretty);
+                SendJson(response, EnsureStatus(resultTask.GetAwaiter().GetResult()), pretty);
             }
             catch (Exception ex)
             {
@@ -568,7 +568,7 @@ public static partial class McpMod
                 int? ascension = ReadOptionalInt(parsed, "ascension");
                 var resultTask = RunOnMainThread(() => ExecuteMenuSelect(option, seed, ascension));
                 var result = resultTask.GetAwaiter().GetResult();
-                SendJson(response, result, pretty);
+                SendJson(response, EnsureStatus(result), pretty);
             }
             catch (Exception ex)
             {
@@ -581,7 +581,7 @@ public static partial class McpMod
         {
             var resultTask = RunOnMainThread(() => ExecuteAction(action, parsed));
             var result = resultTask.GetAwaiter().GetResult();
-            SendJson(response, result, pretty);
+            SendJson(response, EnsureStatus(result), pretty);
         }
         catch (Exception ex)
         {
