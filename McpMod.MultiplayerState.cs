@@ -24,7 +24,8 @@ namespace STS2_MCP;
 
 public static partial class McpMod
 {
-    private static Dictionary<string, object?> BuildMultiplayerGameState()
+    /// <summary>Called through BuildMultiplayerGameState(), which brackets it with the warning collector.</summary>
+    private static Dictionary<string, object?> BuildMultiplayerGameStateCore()
     {
         var result = NewStateResult();
         var tree = Engine.GetMainLoop() as SceneTree;
@@ -316,9 +317,10 @@ public static partial class McpMod
             state["votes"] = votes;
             state["all_voted"] = votes.All(v => v["voted"] is true);
         }
-        catch
+        catch (Exception ex)
         {
             // MapSelectionSynchronizer may not be available in all contexts
+            Warn("map.votes", ex);
         }
 
         // All players summary
@@ -337,7 +339,9 @@ public static partial class McpMod
         {
             var eventSync = RunManager.Instance.EventSynchronizer;
             bool isShared = false;
-            try { isShared = eventSync.IsShared; } catch { /* throws if no event in progress */ }
+            // Left silent: IsShared throws whenever no event is in progress, which is the
+            // normal reading on every other screen - a warning here would fire constantly.
+            try { isShared = eventSync.IsShared; } catch { }
             state["is_shared"] = isShared;
 
             if (isShared)
@@ -358,9 +362,10 @@ public static partial class McpMod
                 state["all_voted"] = votes.All(v => v["voted"] is true);
             }
         }
-        catch
+        catch (Exception ex)
         {
             // EventSynchronizer may not be available
+            Warn("event.votes", ex);
         }
 
         // All players summary
@@ -403,9 +408,10 @@ public static partial class McpMod
                 state["all_bid"] = bids.All(b => b["voted"] is true);
             }
         }
-        catch
+        catch (Exception ex)
         {
             // TreasureRoomRelicSynchronizer may not be available
+            Warn("treasure.bids", ex);
         }
 
         // All players summary

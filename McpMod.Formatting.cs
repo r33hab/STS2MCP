@@ -41,6 +41,16 @@ public static partial class McpMod
             sb.AppendLine();
         }
 
+        // A pasted markdown state is often all a reader gets, so it has to say when parts
+        // of it could not be built - otherwise a field that failed reads as a field that
+        // is not there.
+        if (state.TryGetValue("warnings", out var warningsObj) && warningsObj is List<string> warnings && warnings.Count > 0)
+        {
+            var head = string.Join(" | ", warnings.GetRange(0, Math.Min(3, warnings.Count)));
+            sb.AppendLine($"> ⚠ **{warnings.Count} state warning(s)** — {head}");
+            sb.AppendLine();
+        }
+
         if (stateType == "menu")
         {
             FormatMenuMarkdown(sb, state);
