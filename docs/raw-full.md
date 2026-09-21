@@ -3,6 +3,7 @@
 HTTP API served by the STS2_MCP mod on `localhost:15526`. No authentication. Local use only.
 
 **Endpoints:**
+- `GET  /` — health check: `{ "message", "status", "version", "commit", "schema_version" }`
 - `GET  /api/v1/singleplayer` — read current game state
 - `POST /api/v1/singleplayer` — perform a game action
 - `GET  /api/v1/multiplayer` — read multiplayer game state
@@ -32,7 +33,23 @@ error responses. It has no effect on `format=markdown`.
 
 ### Common Top-Level Fields
 
-Every response (except `menu`) includes these top-level fields alongside the state-specific data:
+Every response — `menu` and error-ish states included — carries the build stamp:
+
+```jsonc
+{
+  "state_type": "...",      // Screen identifier (see sections below)
+  "mod_version": "0.4.0",   // Mod version
+  "mod_commit": "2de67cd",  // Git commit built from ("<sha>-dirty" from an edited tree); null if unknown
+  "schema_version": 1       // Contract version — see below
+}
+```
+
+`schema_version` is bumped **only** when an existing field or action changes meaning or is removed.
+Purely additive changes (new fields, actions, parameters, `state_type`s) do not bump it, so
+feature-detect additions by presence and use `schema_version` only to notice a breaking change.
+
+Every response except `menu` additionally includes these top-level fields alongside the
+state-specific data:
 
 ```jsonc
 {

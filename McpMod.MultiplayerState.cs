@@ -26,7 +26,7 @@ public static partial class McpMod
 {
     private static Dictionary<string, object?> BuildMultiplayerGameState()
     {
-        var result = new Dictionary<string, object?>();
+        var result = NewStateResult();
         var tree = Engine.GetMainLoop() as SceneTree;
 
         // Surface blocking FTUE/tutorial/popup prompts before normal run state, so MP
