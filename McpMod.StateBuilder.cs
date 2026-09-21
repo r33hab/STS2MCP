@@ -282,8 +282,8 @@ public static partial class McpMod
                         }
                         else if (settingsScreen != null && IsNodeVisible(settingsScreen))
                         {
-                            result["menu_screen"] = "settings";
-                            result["message"] = "Settings screen.";
+                            foreach (var entry in BuildSettingsMenuState(settingsScreen, inRun: false))
+                                result[entry.Key] = entry.Value;
                         }
                         else
                         {
@@ -409,7 +409,15 @@ public static partial class McpMod
         var topOverlay = NOverlayStack.Instance?.Peek();
         var currentRoom = runState.CurrentRoom;
         bool mapIsOpen = IsMapScreenOpenOrVisible();
-        if (topOverlay is NCardGridSelectionScreen cardSelectScreen)
+        // The settings screen is pushed on the run's submenu stack, over everything below.
+        // It is checked first so the room underneath is not reported as the live screen.
+        var settingsState = TryBuildSettingsMenuState(tree?.Root, inRun: true);
+        if (settingsState != null)
+        {
+            foreach (var entry in settingsState)
+                result[entry.Key] = entry.Value;
+        }
+        else if (topOverlay is NCardGridSelectionScreen cardSelectScreen)
         {
             result["state_type"] = "card_select";
             result["card_select"] = BuildCardSelectState(cardSelectScreen, runState);
@@ -708,6 +716,67 @@ public static partial class McpMod
         catch { /* best effort */ }
 
         return false;
+    }
+
+    /// <summary>
+    /// The settings screen lives on a submenu stack (NMainMenuSubmenuStack outside a run,
+    /// NRunSubmenuStack inside one), not on the overlay stack and not in the room, so
+    /// nothing else in this state builder notices it. Left unreported, the run-time path
+    /// describes the room underneath and every action sent against that description is
+    /// applied to a screen the player cannot see.
+    ///
+    /// Returns null when the screen is not up, so callers can fall through unchanged.
+    /// A sibling helper can be added here for the pause menu, which shares the stack.
+    /// </summary>
+    private static Dictionary<string, object?>? TryBuildSettingsMenuState(Node? root, bool inRun)
+    {
+        if (root == null)
+            return null;
+
+        var settingsScreen = FindFirst<NSettingsScreen>(root);
+        if (settingsScreen == null || !IsNodeVisible(settingsScreen))
+            return null;
+
+        return BuildSettingsMenuState(settingsScreen, inRun);
+    }
+
+    /// <summary>
+    /// "back" is the only option exposed. Tabs, tickboxes and sliders are deliberately
+    /// not modelled - the point here is that the API can leave a screen it can enter.
+    /// </summary>
+    private static Dictionary<string, object?> BuildSettingsMenuState(NSettingsScreen settingsScreen, bool inRun)
+    {
+        var backButton = FindSettingsBackButton(settingsScreen);
+
+        return new Dictionary<string, object?>
+        {
+            ["state_type"] = "menu",
+            ["menu_screen"] = "settings",
+            ["in_run"] = inRun,
+            ["message"] = inRun
+                ? "Settings screen. The run is paused underneath; 'back' returns to it."
+                : "Settings screen.",
+            ["options"] = new List<Dictionary<string, object?>>
+            {
+                new() { ["name"] = "back", ["enabled"] = backButton?.IsEnabled ?? true }
+            }
+        };
+    }
+
+    /// <summary>
+    /// _backButton is declared on NSubmenu, not on NSettingsScreen; GetInstanceFieldValue
+    /// walks base types, and the tree search is the fallback for a future layout change.
+    /// </summary>
+    private static NClickableControl? FindSettingsBackButton(NSettingsScreen settingsScreen)
+    {
+        try
+        {
+            if (GetInstanceFieldValue(settingsScreen, "_backButton") is NClickableControl clickable)
+                return clickable;
+        }
+        catch { /* reflection is best-effort; fall back to the tree search */ }
+
+        return FindFirst<NBackButton>(settingsScreen);
     }
 
     private static void AddCharacterSelectMenuState(

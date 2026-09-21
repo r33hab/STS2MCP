@@ -184,6 +184,8 @@ async def menu_select(option: str, seed: str | None = None, ascension: int | Non
     multiplayer load lobby (resume saved co-op run), character select for SP
     and MP (with `unready` once readied in MP), profile switching, timeline
     controls, tutorial prompts, blocking popups, and game-over main-menu return.
+    On menu_screen "settings" (reported both on the main menu and mid-run) the
+    only option is "back", which closes the screen and returns to what was under it.
 
     Multiplayer flow tips:
       - On menu_screen "multiplayer_join", use refresh / back / join_<index> /
