@@ -27,6 +27,8 @@ Every JSON response includes:
 - `run` — `{ act, floor, ascension }` (absent for `menu`)
 - `player` — full player state: character, HP, gold, relics, potions, `max_potion_slots` (belt capacity, grows with relics), and during combat: energy, hand, piles, orbs (absent for `menu`)
 
+Every card object carries `is_upgraded`, `is_upgradable`, `upgrade_level` and `max_upgrade_level` (a card can have more than one upgrade level, so `is_upgraded` does not mean "no upgrade left"). On the screens where an upgrade or a pick is being decided — `card_select` with `screen_type: "upgrade"`, `hand_select` with `mode: "upgrade_select"`, and `card_reward` — a card that still has an upgrade left also carries `upgrade_preview`: `{ name, cost, star_cost, description, keywords }` of the card as it would read after one upgrade, built from the game's own upgraded clone. It is absent everywhere else (combat hand, piles, deck list) to keep the payload small.
+
 | `state_type` | Screen | Available Actions |
 |---|---|---|
 | `menu` | Main menu, menu submenu (incl. multiplayer host/join/load lobby), character select, or a blocking FTUE/tutorial/popup that can also appear mid-run | `menu_select` |
@@ -124,6 +126,8 @@ Example searches:
 | `combat_select_card` | `card_index`: int | Select/deselect a card during "choose a card to exhaust/discard" prompts. |
 | `combat_confirm_selection` | _(none)_ | Confirm the hand card selection. |
 
+When `mode` is `upgrade_select`, each selectable card with an upgrade left carries `upgrade_preview` (its upgraded form).
+
 ### Rewards (`rewards`)
 
 | Action | Parameters | When to Use |
@@ -138,6 +142,8 @@ Example searches:
 | `select_card_reward` | `card_index`: int | Pick a card to add to deck. |
 | `skip_card_reward` | _(none)_ | Skip the card reward (if allowed). Picks the `Skip` option by id, not whichever button is first — a relic can add its own alternative, and skipping does not take it. |
 | `select_card_reward_alternative` | `option_id`: string (or `index`: int) | Take one of the card reward's alternative options, listed in state under `card_reward.alternatives`. `Skip` is one; relics add others (Pael's Wing adds `SACRIFICE`, which turns the reward into progress towards a relic — skipping does **not** count as sacrificing). |
+
+Each offered card with an upgrade left carries `upgrade_preview`, so the upgraded form can weigh into the pick.
 
 ### Map (`map`)
 
@@ -182,6 +188,8 @@ Example searches:
 | `select_card` | `index`: int | Grid screens: toggle card selection. Choose-a-card: pick immediately. |
 | `confirm_selection` | _(none)_ | Confirm (for grid screens with preview). Not needed for choose-a-card. |
 | `cancel_selection` | _(none)_ | Cancel preview, skip (choose-a-card), or close screen. |
+
+On the upgrade screen (`screen_type: "upgrade"`), each card with an upgrade left carries `upgrade_preview` (its upgraded form). The transform/remove screens do not.
 
 ### Bundle Selection Overlay (`bundle_select`)
 
