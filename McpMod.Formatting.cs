@@ -761,20 +761,29 @@ public static partial class McpMod
         // to be JSON-only, which made it invisible to the markdown workflow.
         FormatMapBossMarkdown(sb, map);
 
-        // What the next monster / elite room will actually serve.
-        if (map.TryGetValue("next_encounters", out var neObj) && neObj is Dictionary<string, object?> nextEncounters && nextEncounters.Count > 0)
+        // What this act has already served. NOT what comes next - the game does not show that
+        // before the room is entered, and neither do we (see BuildEncountersSeen).
+        if (map.TryGetValue("encounters_seen", out var esObj) && esObj is Dictionary<string, object?> seen && seen.Count > 0)
         {
-            sb.AppendLine("**Next encounters:** " + string.Join(" | ", nextEncounters.Select(kv =>
+            var parts = new List<string>();
+            foreach (var key in new[] { "monster", "elite", "event" })
             {
-                if (kv.Value is not Dictionary<string, object?> enc)
-                    return $"{kv.Key}: ?";
-                string name = enc.TryGetValue("name", out var n) && n != null ? n.ToString()! : enc.GetValueOrDefault("id")?.ToString() ?? "?";
-                string weak = enc.TryGetValue("is_weak", out var w) && w is true ? " (weak)" : "";
-                string monsters = enc.TryGetValue("possible_monsters", out var m) && m is List<string> ml && ml.Count > 0
-                    ? $" [{string.Join(", ", ml)}]" : "";
-                return $"{kv.Key}: {name}{weak}{monsters}";
-            })));
-            sb.AppendLine();
+                if (seen.GetValueOrDefault(key) is not List<Dictionary<string, object?>> rooms || rooms.Count == 0)
+                    continue;
+                parts.Add($"{key}: " + string.Join(", ", rooms.Select(r =>
+                {
+                    string name = r.TryGetValue("name", out var n) && n != null ? n.ToString()! : r.GetValueOrDefault("id")?.ToString() ?? "?";
+                    string floor = r.TryGetValue("floor", out var f) && f != null ? $" (f{f})" : "";
+                    return $"{name}{floor}";
+                })));
+            }
+            if (parts.Count > 0)
+            {
+                string cycle = seen.GetValueOrDefault("elite_cycle") is int c && c > 0
+                    ? $" - elite pool cycled x{c} (a fought elite can return)" : "";
+                sb.AppendLine("**Fought this act:** " + string.Join(" | ", parts) + cycle);
+                sb.AppendLine();
+            }
         }
 
         // Path taken

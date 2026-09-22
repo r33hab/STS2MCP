@@ -566,7 +566,22 @@ Pick one card to add to your deck. Appears after claiming a card reward, or dire
     },
     "bosses": [
       { "col": 3, "row": 15, "id": "ENCOUNTER.VANTOM_BOSS", "name": "Vantom" }
-    ]
+    ],
+    // What this act has ALREADY served. There is no "next encounter" field: the game does
+    // not show that before the room is entered. Omitted entirely before the first room.
+    "encounters_seen": {
+      "act": 1,
+      "monster": [
+        { "floor": 2, "id": "NIBBITS_WEAK", "name": "Nibbits", "monsters": ["Nibbit", "Nibbit"] }
+      ],
+      "elite": [
+        { "floor": 8, "id": "BYRDONIS_ELITE", "name": "Byrdonis", "monsters": ["Byrdonis"] }
+      ],
+      "event": [
+        { "floor": 1, "id": "NEOW", "name": "Neow" }
+      ]
+      // "elite_cycle": 1   // only once the act's elite pool has wrapped at least once
+    }
   },
   "run": { ... },
   "player": { ... }

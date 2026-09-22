@@ -39,6 +39,7 @@ using MegaCrit.Sts2.Core.Rewards;
 using MegaCrit.Sts2.Core.Models.Monsters;
 using MegaCrit.Sts2.Core.Rooms;
 using MegaCrit.Sts2.Core.Runs;
+using MegaCrit.Sts2.Core.Runs.History;
 using MegaCrit.Sts2.Core.Models.RelicPools;
 using MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect;
 using MegaCrit.Sts2.Core.Nodes.Screens.MainMenu;
@@ -2734,9 +2735,9 @@ public static partial class McpMod
 
         state["nodes"] = nodes;
 
-        var nextEncounters = BuildNextEncounters(runState);
-        if (nextEncounters.Count > 0)
-            state["next_encounters"] = nextEncounters;
+        var encountersSeen = BuildEncountersSeen(runState);
+        if (encountersSeen.Count > 0)
+            state["encounters_seen"] = encountersSeen;
         var primaryBoss = BuildBossInfo(map.BossMapPoint, primaryBossId, primaryBossName);
         state["boss"] = primaryBoss;
         state["bosses"] = secondBoss != null
@@ -2747,70 +2748,138 @@ public static partial class McpMod
     }
 
     /// <summary>
-    /// The encounter each room type will serve next. Acts draw combats from a fixed
-    /// ordered list, so the next monster / elite fight is known before entering the
-    /// room — the game logs it at combat start, but state only ever reported enemies
-    /// once the fight had already begun, which is too late to route around a bad matchup.
+    /// What this act has already served. The game keeps its own record of every map point
+    /// entered (<see cref="RunState.MapPointHistory"/>), and shows the same thing to the
+    /// player: hovering a travelled node on the map opens NMapPointHistoryHoverTip, which
+    /// prints the encounter's title. So this is information the human already has.
     ///
-    /// Read-only: RoomSet's Next* getters peek at the list, they do not advance it.
+    /// This deliberately replaces the old `next_encounters` field, which peeked at the act's
+    /// pre-rolled RoomSet and reported which monster / elite / event would come NEXT. The game
+    /// does not reveal that until the room is entered, so reporting it let an agent route
+    /// around matchups no human could see. Removing it is why schema_version went to 3.
+    ///
+    /// We report what was fought, never what remains: listing the unused pool would let a
+    /// caller deduce the next encounter by elimination, which is the same leak by another name.
+    /// `elite_cycle` is the exception and is safe - it is a count, derivable by any player from
+    /// (a) what they have fought and (b) how many elites the act has, and it encodes the rule
+    /// the user cares about: an elite already fought does not return until the pool wraps.
     /// </summary>
-    private static Dictionary<string, object?> BuildNextEncounters(RunState runState)
+    private static Dictionary<string, object?> BuildEncountersSeen(RunState runState)
     {
         var result = new Dictionary<string, object?>();
         try
         {
-            var rooms = GetInstanceFieldValue(runState.Act, "_rooms");
-            if (rooms == null)
+            var history = runState.MapPointHistory;
+            int act = runState.CurrentActIndex;
+            if (history == null || act < 0 || act >= history.Count)
                 return result;
 
-            AddNextEncounter(result, "monster", GetPropertyValue(rooms, "NextNormalEncounter"));
-            AddNextEncounter(result, "elite", GetPropertyValue(rooms, "NextEliteEncounter"));
+            var monsters = new List<Dictionary<string, object?>>();
+            var elites = new List<Dictionary<string, object?>>();
+            var events = new List<Dictionary<string, object?>>();
 
-            var nextEvent = GetPropertyValue(rooms, "NextEvent");
-            if (nextEvent != null)
+            var entries = history[act];
+            for (int i = 0; i < entries.Count; i++)
             {
-                result["event"] = new Dictionary<string, object?>
+                var entry = entries[i];
+                if (entry?.Rooms == null)
+                    continue;
+
+                // One map point can hold several rooms (an event that turns into a fight), so
+                // walk them all and classify by RoomType - the map point's own type would lose
+                // what a `?` resolved into.
+                bool viaEvent = entry.Rooms.Count > 1;
+                foreach (var room in entry.Rooms)
                 {
-                    ["id"] = SafeGetText(() => ((AbstractModel)nextEvent).Id.Entry),
-                    ["name"] = SafeGetText(() => GetPropertyValue(nextEvent, "Title"))
-                };
+                    var target = room.RoomType switch
+                    {
+                        RoomType.Monster => monsters,
+                        RoomType.Elite => elites,
+                        RoomType.Event => events,
+                        _ => null            // Boss is already in map.boss; Shop/Treasure/RestSite carry nothing
+                    };
+                    if (target == null)
+                        continue;
+
+                    var info = new Dictionary<string, object?>
+                    {
+                        ["floor"] = i + 1,           // 1-based within the act
+                        ["id"] = SafeGetText(() => room.ModelId?.Entry)
+                    };
+
+                    if (room.ModelId != null)
+                    {
+                        info["name"] = room.RoomType == RoomType.Event
+                            ? SafeGetText(() => SaveUtil.EventOrDeprecated(room.ModelId).Title)
+                            : SafeGetText(() => SaveUtil.EncounterOrDeprecated(room.ModelId).Title);
+                    }
+
+                    // The monsters the encounter actually resolved to - random line-ups differ
+                    // between two rooms with the same encounter id.
+                    if (room.MonsterIds != null && room.MonsterIds.Count > 0)
+                    {
+                        info["monsters"] = room.MonsterIds
+                            .Select(id => SafeGetText(() => SaveUtil.MonsterOrDeprecated(id).Title)
+                                          ?? SafeGetText(() => id.Entry) ?? "?")
+                            .ToList();
+                    }
+
+                    if (viaEvent && room.RoomType != RoomType.Event)
+                        info["via_event"] = true;
+
+                    target.Add(info);
+                }
             }
+
+            if (monsters.Count > 0) result["monster"] = monsters;
+            if (elites.Count > 0) result["elite"] = elites;
+            if (events.Count > 0) result["event"] = events;
+            if (result.Count > 0)
+                result["act"] = act + 1;
+
+            var cycle = EliteCycle(runState, elites.Count);
+            if (cycle > 0)
+                result["elite_cycle"] = cycle;
         }
-        catch (Exception ex) { Warn("map.next_encounters", ex); }
+        catch (Exception ex) { Warn("map.encounters_seen", ex); }
 
         return result;
     }
 
-    private static void AddNextEncounter(Dictionary<string, object?> target, string key, object? encounterObj)
-    {
-        if (encounterObj is not EncounterModel encounter)
-            return;
-
-        var info = new Dictionary<string, object?>
-        {
-            ["id"] = SafeGetText(() => encounter.Id.Entry),
-            ["name"] = SafeGetText(() => encounter.Title),
-            ["is_weak"] = SafeGetBool(() => encounter.IsWeak)
-        };
-
-        try
-        {
-            var monsters = encounter.AllPossibleMonsters?
-                .Select(m => SafeGetText(() => m.Title) ?? SafeGetText(() => m.Id.Entry) ?? "?")
-                .ToList();
-            if (monsters != null && monsters.Count > 0)
-                info["possible_monsters"] = monsters;
-        }
-        catch (Exception ex) { Warn($"map.next_encounters.{key}.possible_monsters", ex); }
-
-        target[key] = info;
-    }
-
+    /// <summary>
+    /// How many times this act's elite pool has been exhausted. 0 while every elite fought so
+    /// far is a first encounter, 1 once the pool has wrapped once, and so on.
+    ///
+    /// The act builds its elite list by drawing the whole pool without replacement and refilling
+    /// when it empties, so "visited / pool size" is exactly the number of completed passes.
+    /// Prefers the game's own counter and falls back to counting this act's elite rooms.
+    /// Only the count is reported - never the pool's contents.
+    /// </summary>
     private static object? GetPropertyValue(object target, string propertyName)
     {
         try { return target.GetType().GetProperty(propertyName)?.GetValue(target); }
         catch (Exception ex) { Warn($"{target.GetType().Name}.{propertyName}", ex); return null; }
     }
+
+    private static int EliteCycle(RunState runState, int elitesFoughtThisAct)
+    {
+        int poolSize;
+        try
+        {
+            poolSize = runState.Act.AllEliteEncounters?.Count() ?? 0;
+        }
+        catch (Exception ex) { Warn("map.encounters_seen.elite_cycle", ex); return 0; }
+        if (poolSize <= 0)
+            return 0;
+
+        int visited = elitesFoughtThisAct;
+        var rooms = GetInstanceFieldValue(runState.Act, "_rooms");
+        if (rooms != null && GetInstanceFieldValue(rooms, "eliteEncountersVisited") is int counted)
+            visited = counted;
+
+        return visited / poolSize;
+    }
+
 
     // The caller's name stands in for a field name here: this helper has no idea which
     // part of the state it is feeding, and "bool: NullReferenceException" alone names nothing.

@@ -37,8 +37,14 @@ public static partial class McpMod
     ///    fight (a Decimillipede segment waiting to reattach) is now listed with
     ///    alive:false, so a client that treated every entry as a target has to filter on
     ///    the new `alive` field.
+    ///
+    /// 3: map.next_encounters is gone. It reported which monster / elite / event the act would
+    ///    serve NEXT, read out of the pre-rolled RoomSet - information the game does not show
+    ///    until the room is entered, so it let a client route around matchups no player could
+    ///    see. map.encounters_seen replaces it with what this act has ALREADY served, which is
+    ///    what the map's own hover tips show for travelled nodes.
     /// </summary>
-    public const int StateSchemaVersion = 2;
+    public const int StateSchemaVersion = 3;
 
     public const int DefaultPort = 15526;
     private const string ConfigFileName = "STS2_MCP.conf";
