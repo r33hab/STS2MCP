@@ -1,6 +1,8 @@
 # API Quick Reference
 
-HTTP API on `localhost:15526`. No authentication.
+HTTP API on `localhost:15526`. Every request needs the header `X-STS2-Token: <token>` (the `token` in
+`STS2_MCP.conf`, next to the mod DLL); POST bodies must be `application/json`. See `raw-full.md`,
+"Authentication and configuration".
 
 - `GET /` — health check; returns `{ message, status, version, commit, schema_version }`
 - `GET /api/v1/singleplayer` — read game state

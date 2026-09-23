@@ -22,10 +22,11 @@ public static partial class McpMod
     private static void HandleGetCompendium(HttpListenerRequest request, HttpListenerResponse response)
     {
         bool pretty = WantsPretty(request);
+        bool includeHiddenState = WantsHiddenState(request);
         try
         {
             var snapshot = RunOnMainThreadBlocking(BuildCompendiumSnapshot);
-            SendJson(response, BuildCompendiumResponse(snapshot), pretty);
+            SendJson(response, BuildCompendiumResponse(snapshot, includeHiddenState), pretty);
         }
         catch (MainThreadUnavailableException ex)
         {
@@ -106,7 +107,8 @@ public static partial class McpMod
         };
     }
 
-    private static object BuildCompendiumResponse(CompendiumSnapshot snapshot)
+    /// <param name="includeHiddenState">Add current_run.seed. See WantsHiddenState.</param>
+    private static object BuildCompendiumResponse(CompendiumSnapshot snapshot, bool includeHiddenState = false)
     {
         if (snapshot.Error != null)
             return new Dictionary<string, object?> { ["error"] = snapshot.Error };
@@ -116,7 +118,7 @@ public static partial class McpMod
         return new Dictionary<string, object?>
         {
             ["profile_id"] = snapshot.ProfileId,
-            ["current_run"] = BuildCurrentRunContext(snapshot),
+            ["current_run"] = BuildCurrentRunContext(snapshot, includeHiddenState),
             ["source"] = "SaveManager.Progress and active-profile save files",
             ["sections"] = new Dictionary<string, object?>
             {
@@ -361,7 +363,8 @@ public static partial class McpMod
         return entry;
     }
 
-    private static Dictionary<string, object?>? BuildCurrentRunContext(CompendiumSnapshot snapshot)
+    private static Dictionary<string, object?>? BuildCurrentRunContext(
+        CompendiumSnapshot snapshot, bool includeHiddenState)
     {
         if (!snapshot.IsRunInProgress)
             return null;
@@ -398,7 +401,12 @@ public static partial class McpMod
             CopyJsonScalar(root, result, "schema_version");
             CopyJsonScalar(root, result, "platform_type");
 
-            if (root.TryGetProperty("rng", out var rng)
+            // HIDDEN STATE: the seed of the run in progress drives every one of its RNG streams -
+            // draws, rewards, events, encounters - so a client that has it (and a simulator) can
+            // predict them all. Reported only to an opted-in `?hidden=1` read. Finished runs'
+            // seeds (run_history) reveal nothing about this one and stay.
+            if (includeHiddenState
+                && root.TryGetProperty("rng", out var rng)
                 && rng.ValueKind == JsonValueKind.Object
                 && rng.TryGetProperty("seed", out var seed))
                 result["seed"] = GetJsonValue(seed);

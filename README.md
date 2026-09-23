@@ -34,6 +34,11 @@ returned by `GET /api/v1/singleplayer`). **They are not exposed through the bund
 `docs/raw-*.md` is upstream's API reference and does not describe them — this section and
 [FORK_NOTES.md](FORK_NOTES.md) are their documentation.
 
+> [!important]
+> The `debug_*` actions below answer `403 debug actions disabled` unless `STS2_MCP.conf` sets
+> `"allow_debug_actions": true`, and `draw_pile_ordered` needs `"allow_hidden_state": true` plus `?hidden=1`.
+> Every request needs the API token. See [API token and access control](#api-token-and-access-control).
+
 ### Reaching a chosen room on demand — `McpMod.Debug.cs`
 
 Ground truth for a specific encounter, event or shop is unobtainable if you have to play until the game
@@ -95,10 +100,11 @@ reuses the `seed` field to carry the level, because `menu_select` has no other f
 - **`deck`** — the run deck, on every screen. It is not a combat pile, so upstream reported it nowhere;
   outside combat every pile is empty, and the deck is exactly what events that transform, upgrade, add or
   remove cards act on. Without it, a harness cannot see the deck an agent is supposed to be building.
-- **`draw_pile_ordered`, `discard_pile_ordered`, `hand_ordered`** — true pile order (index 0 = top, drawn
-  next) with raw entry ids. Upstream's `draw_pile` is sorted by rarity/id to match the in-game display, so
-  it cannot be used to compare card *sequences*. Both views are kept; existing consumers rely on the
-  sorted one.
+- **`hand_ordered`, `discard_pile_ordered`, `exhaust_pile_ordered`, `draw_pile_ordered`** — true pile order
+  (index 0 = top; for the draw pile, drawn next) with raw entry ids. Upstream's `draw_pile` is sorted by
+  rarity/id to match the in-game display, so it cannot be used to compare card *sequences*. Both views are
+  kept; existing consumers rely on the sorted one. The draw order is hidden information — the game never
+  shows it — so `draw_pile_ordered` is reported only with `allow_hidden_state` and `?hidden=1`.
 - **`rooms_entered`** — a count of room entries that have run to completion. `RunManager.EnterRoomInternal`
   is async and fires `RoomEntered` as its last statement, while the HTTP state reports a non-menu state
   well before that. A harness embarking runs back to back waits for this to advance before acting.
@@ -166,10 +172,12 @@ cp out/STS2_MCP/STS2_MCP.dll "$MODS_DIR/"
 cp mod_manifest.json         "$MODS_DIR/"
 ```
 
-Launch the game and open **Settings → Mods** — the mod should appear in the list. Then verify the server:
+Launch the game and open **Settings → Mods** — the mod should appear in the list. Then verify the server with
+the token the mod wrote next to the DLL (see [API token and access control](#api-token-and-access-control)):
 
 ```bash
-curl -s http://localhost:15526/
+TOKEN=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["token"])' "$MODS_DIR/STS2_MCP.conf")
+curl -s -H "X-STS2-Token: $TOKEN" http://localhost:15526/
 ```
 
 A successful response looks like:
@@ -184,6 +192,42 @@ changes meaning or is removed; new fields and actions do not bump it. Every stat
 same three values as `mod_version`, `mod_commit` and `schema_version`.
 
 If you get "Connection refused", the mod is not loaded — check that mods are enabled in the game's settings.
+A `401` means the token is missing or wrong.
+
+#### API token and access control
+
+The API answers only requests that carry its token, and refuses web pages outright, so leaving the game
+running with the mod loaded does not let a website read your game or play it.
+
+- The token lives in `STS2_MCP.conf` next to the DLL. When the file has none, the mod generates a random
+  64-hex-character `token` at startup and writes it in (creating the file, with the `port`, if needed), keeping
+  every other key; on macOS and Linux it then makes the file readable by your user only. Send the token on
+  every request as `X-STS2-Token: <token>` or `Authorization: Bearer <token>`; without it every endpoint,
+  `GET /` included, answers `401 {"status": "error", "error": "Missing or invalid token"}`.
+- The environment variable `STS2_MCP_TOKEN`, set for the game process, overrides the conf's token.
+- A request with an `Origin` header — anything a web page sends — gets
+  `403 "Browser origins are not permitted"`, and no CORS headers are ever sent. POST bodies must be
+  `Content-Type: application/json` (`415` otherwise).
+- Two opt-in switches live in the same file, both off unless set to JSON `true`:
+  - `allow_hidden_state` lets a `GET` with `?hidden=1` add what the game never shows the player: the true
+    draw order (`player.draw_pile_ordered`) and the run's seed (the compendium's `current_run.seed`).
+  - `allow_debug_actions` enables the `debug_*` actions described under
+    [What this fork adds](#what-this-fork-adds); otherwise they answer
+    `403 {"status": "error", "error": "debug actions disabled"}`.
+- The mod reads the file once at game start: restart the game after editing it. The full reference is in
+  [docs/raw-full.md](docs/raw-full.md#authentication-and-configuration).
+
+```json
+{
+  "port": 15526,
+  "token": "…64 hex characters…",
+  "allow_hidden_state": false,
+  "allow_debug_actions": false
+}
+```
+
+> [!note]
+> The bundled MCP server (`mcp/server.py`) does not send the token yet, so this build answers it with `401`.
 
 ### 2. Give Your AI Instructions to Interact with the Game
 

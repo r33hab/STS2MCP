@@ -1,6 +1,7 @@
 # Full API Reference
 
-HTTP API served by the STS2_MCP mod on `localhost:15526`. No authentication. Local use only.
+HTTP API served by the STS2_MCP mod on `localhost:15526`. Local use only. Every request needs the API token
+from `STS2_MCP.conf`, and web pages are refused outright — see [Authentication and configuration](#authentication-and-configuration).
 
 **Endpoints:**
 - `GET  /` — health check: `{ "message", "status", "version", "commit", "schema_version" }`
@@ -18,6 +19,81 @@ The endpoints are mutually exclusive: calling singleplayer during a multiplayer 
 
 ---
 
+## Authentication and configuration
+
+Every request, to every endpoint including `GET /`, must carry the API token in one of these headers:
+
+```
+X-STS2-Token: <token>
+Authorization: Bearer <token>
+```
+
+If `X-STS2-Token` is present it is the one checked; a wrong `X-STS2-Token` is not rescued by a correct
+`Authorization` header. The comparison runs in constant time.
+
+These checks run before any routing, in this order:
+
+| Check | Failure |
+|---|---|
+| The request carries an `Origin` header, i.e. it came from a web page | HTTP 403 `{"status": "error", "error": "Browser origins are not permitted"}` |
+| The token is missing or wrong | HTTP 401 `{"status": "error", "error": "Missing or invalid token"}` |
+| A `POST` body is not `Content-Type: application/json` (parameters such as `; charset=utf-8` are fine) | HTTP 415 `{"status": "error", "error": "POST bodies must be application/json"}` |
+
+No CORS headers are sent, and a CORS preflight (`OPTIONS` with `Origin`) gets the same 403: no web page can
+call this API or read its replies.
+
+### `STS2_MCP.conf`
+
+A JSON file next to the mod DLL (`mods/STS2_MCP/STS2_MCP.conf`). The mod reads it once, when the game starts:
+restart the game after editing it.
+
+| Key | Type | Default | Meaning |
+|---|---|---|---|
+| `port` | int | `15526` | Port to listen on. The server binds `localhost` and `127.0.0.1` only. |
+| `token` | string | generated | The API token. When it is absent or blank, the mod generates 64 random hex characters and writes them back into the file, keeping every other key. |
+| `allow_hidden_state` | bool | `false` | Allow `?hidden=1` reads of [hidden information](#hidden-information). |
+| `allow_debug_actions` | bool | `false` | Allow the [debug and staging actions](#debug-and-staging-actions). |
+
+- The environment variable `STS2_MCP_TOKEN`, when set to a non-blank value, takes precedence over `token`; no
+  token is generated or written then.
+- The two gates are on only for a literal JSON `true`. `"true"` or `1` leave them off.
+- When the mod creates the file or writes a generated token into it, it makes the file readable by its owner
+  only (`0600`) on macOS and Linux.
+- A file that is not a valid JSON object is reported in the game log and left untouched. The mod then runs with
+  the default port, both gates off, and a random token it does not publish, so every request is refused until
+  the file is fixed.
+
+```jsonc
+{
+  "port": 15526,
+  "token": "…64 hex characters…",
+  "allow_hidden_state": false,
+  "allow_debug_actions": false
+}
+```
+
+```bash
+TOKEN=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["token"])' "$MODS_DIR/STS2_MCP.conf")
+curl -s -H "X-STS2-Token: $TOKEN" http://localhost:15526/
+```
+
+### Hidden information
+
+A few fields reveal what the game never shows the player. They are left out of every response unless **both**
+`allow_hidden_state` is `true` in `STS2_MCP.conf` **and** the `GET` request has the query parameter `hidden=1`
+(exactly `1`). They exist for tests and capture tools; a coach or autopilot must not read them.
+
+| Field | Endpoint | What it reveals |
+|---|---|---|
+| `player.draw_pile_ordered` | `GET /api/v1/singleplayer`, in combat | The draw pile's true order. The game's own draw-pile screen sorts it, exactly as `draw_pile` does. |
+| `current_run.seed` | `GET /api/v1/compendium` | The seed of the run in progress, which drives every RNG stream of the run. |
+
+They never appear in `POST` responses (including the `state` a `wait: true` action returns), on the multiplayer
+endpoint, or in markdown output. `hand_ordered`, `discard_pile_ordered` and `exhaust_pile_ordered` are always
+reported in combat, because the game shows those piles in their true order.
+
+---
+
 ## GET — Read Game State
 
 ### Query Parameters
@@ -26,6 +102,7 @@ The endpoints are mutually exclusive: calling singleplayer during a multiplayer 
 |-----------|-----------------------------------------------|---------|-----------------------------------------------------------------|
 | `format`  | `json`, `markdown`                            | `json`  | Response format                                                 |
 | `pretty`  | `1`, `true`, `yes` (or present with no value) | off     | Indent the JSON. Off by default — compact output is ~32% smaller |
+| `hidden`  | `1`                                           | off     | Add the [hidden-information](#hidden-information) fields. Ignored unless `allow_hidden_state` is `true` in `STS2_MCP.conf` |
 
 JSON responses are compact by default; `pretty` opts into indentation for that one request. It works on
 every JSON-returning endpoint, on POST as well as GET (e.g. `POST /api/v1/singleplayer?pretty=1`), and on
@@ -92,6 +169,12 @@ Always present at the top level (except `menu`). Contains everything about the l
   "draw_pile": [ /* Pile Card Objects (sorted by rarity, matching in-game display) */ ],
   "discard_pile": [ /* Pile Card Objects */ ],
   "exhaust_pile": [ /* Pile Card Objects */ ],
+  // The same cards in the game's own order: the hand as in `hand`, and for the piles index 0 is the top.
+  "hand_ordered": [ { "id": "STRIKE_R", "is_upgraded": false } ],
+  "discard_pile_ordered": [ /* same shape */ ],
+  "exhaust_pile_ordered": [ /* same shape */ ],
+  "draw_pile_ordered": [ /* same shape; index 0 is drawn next. Hidden information: only with
+                           allow_hidden_state and ?hidden=1, see "Hidden information" */ ],
   "orbs": [ /* Orb Objects */ ],   // Defect only; omitted if orb capacity is 0
   "orb_slots": 3,
   "orb_empty_slots": 1,
@@ -981,7 +1064,7 @@ Returns the active profile's persistent progress summary, including character st
 
 Returns the active profile's progress grouped by the in-game Compendium cards:
 
-- `current_run`: present while a run is active. Includes a derived `run_id` in `{save_scope}:profile{profile_id}:{start_time}` format, plus `start_time`, `seed`, `save_time`, `run_time`, and run metadata read from `current_run.save`.
+- `current_run`: present while a run is active. Includes a derived `run_id` in `{save_scope}:profile{profile_id}:{start_time}` format, plus `start_time`, `save_time`, `run_time`, and run metadata read from `current_run.save`. Its `seed` is [hidden information](#hidden-information): it drives every RNG stream of the run in progress, so it is reported only when `allow_hidden_state` is `true` and the request has `?hidden=1`.
 - `card_library`: discovered card IDs and card pick/skip/win/loss stats. This endpoint intentionally reports profile-level progress; card rules text remains available through game state when cards are visible in a run.
 - `relic_collection`: discovered relic IDs. The profile save exposes discovery, but not a typed per-relic description or obtained-count catalog.
 - `potion_lab`: discovered potion IDs. The profile save exposes discovery, but not a typed per-potion rules text or lab metadata catalog.
@@ -991,7 +1074,7 @@ Returns the active profile's progress grouped by the in-game Compendium cards:
 
 The response is built from `SaveManager.Progress`, the active profile's `progress.save` path, and local run-history files under the same active Steam account. It does not scan every Steam account under the save root. Run-history parsing is bounded to the 20 most recent `.run` files in the response so profile pages with many saved runs do not return unbounded payloads.
 
-`current_run.run_id` is derived from save scope, profile id, and run `start_time`. Use it to identify one concrete run attempt. Use `seed` separately when grouping runs by generated content, because multiple attempts can share the same seed.
+`current_run.run_id` is derived from save scope, profile id, and run `start_time`. Use it to identify one concrete run attempt. To group runs by generated content, use the `seed` of finished runs in `run_history` (not gated: a finished run's seed reveals nothing about the one in progress), or `current_run.seed` on an opted-in `?hidden=1` read; multiple attempts can share the same seed.
 
 ```jsonc
 {
@@ -1002,7 +1085,7 @@ The response is built from `SaveManager.Progress`, the active profile's `progres
     "save_scope": "modded",
     "run_id": "modded:profile1:1778295706",
     "start_time": 1778295706,
-    "seed": "2450ZAR9EF",
+    "seed": "2450ZAR9EF",   // only with allow_hidden_state and ?hidden=1
     "run_time": 137
   },
   "sections": {
@@ -1155,9 +1238,10 @@ Action failures — the action was understood but could not be performed — are
 { "status": "error", "error": "Card requires a target. Provide 'target' with an entity_id." }
 ```
 
-Transport failures — invalid JSON, a missing `action` field, an unknown route, a wrong HTTP method,
-the wrong run mode for the endpoint, or an unhandled exception — use an **HTTP 4xx/5xx** code but the
-same body shape:
+Transport failures — a browser `Origin` (403), a missing or wrong token (401), a body that is not
+`application/json` (415), a disabled debug action (403), invalid JSON, a missing `action` field, an unknown
+route, a wrong HTTP method, the wrong run mode for the endpoint, or an unhandled exception — use an
+**HTTP 4xx/5xx** code but the same body shape:
 
 ```jsonc
 // HTTP 400
@@ -1180,6 +1264,21 @@ did not answer within 10 s, or more than 32 requests are already queued, which o
 game is not processing frames (scene load, hang, minimized or paused app). Nothing was applied to the
 run, so the same request may be sent again once the game is responsive. Contrast with `500`, where
 the action ran and threw.
+
+### Debug and staging actions
+
+The `debug_*` actions rewrite the run instead of playing it: `debug_start_encounter`, `debug_start_event`,
+`debug_start_shop`, `debug_force_play_phase`, `debug_add_card`, `debug_set_energy`, `debug_set_stars`,
+`debug_add_power`, `debug_enchant_card`, `debug_enter_next_act`, `debug_gain_max_hp` and `debug_upgrade_deck`
+(the fork's README describes them). Unless `STS2_MCP.conf` sets `allow_debug_actions` to `true`, every one of
+them is refused before it reaches the game:
+
+```jsonc
+// HTTP 403
+{ "status": "error", "error": "debug actions disabled" }
+```
+
+`return_to_main_menu` is not a debug action — it is the pause menu's own Save and Quit — and is always allowed.
 
 ### Waiting for the Game to Settle
 

@@ -82,7 +82,7 @@ public static partial class McpMod
     }
 
     /// <summary>Called through BuildGameState(), which brackets it with the warning collector.</summary>
-    private static Dictionary<string, object?> BuildGameStateCore()
+    private static Dictionary<string, object?> BuildGameStateCore(bool includeHiddenState)
     {
         var result = NewStateResult();
         var tree = (Godot.Engine.GetMainLoop()) as SceneTree;
@@ -668,7 +668,7 @@ public static partial class McpMod
         var _player = LocalContext.GetMe(runState);
         if (_player != null)
         {
-            result["player"] = BuildPlayerState(_player);
+            result["player"] = BuildPlayerState(_player, includeHiddenState);
         }
 
         AddResolvingState(result, result.GetValueOrDefault("state_type")?.ToString());
@@ -1595,7 +1595,10 @@ public static partial class McpMod
         return battle;
     }
 
-    private static Dictionary<string, object?> BuildPlayerState(Player player)
+    /// <param name="includeHiddenState">
+    /// Add draw_pile_ordered, the draw pile's true order. See WantsHiddenState.
+    /// </param>
+    private static Dictionary<string, object?> BuildPlayerState(Player player, bool includeHiddenState = false)
     {
         var state = new Dictionary<string, object?>();
         var creature = player.Creature;
@@ -1654,7 +1657,13 @@ public static partial class McpMod
             // rarity/id to match the in-game display, so it cannot be used to compare
             // card *sequences* against the emulator. Used by the draw-pile differential
             // test; keep both, since existing consumers rely on the sorted view.
-            state["draw_pile_ordered"] = BuildOrderedPileList(combatState.DrawPile.Cards);
+            //
+            // HIDDEN STATE: the draw order is never shown to the player - the game's own
+            // draw-pile screen (NCardPileScreen.OnPileContentsChanged) sorts it exactly like
+            // `draw_pile` above - so it is reported only to an opted-in `?hidden=1` read.
+            // Hand, discard and exhaust are shown in their true order, so those stay.
+            if (includeHiddenState)
+                state["draw_pile_ordered"] = BuildOrderedPileList(combatState.DrawPile.Cards);
             state["discard_pile_ordered"] = BuildOrderedPileList(combatState.DiscardPile.Cards);
             state["hand_ordered"] = BuildOrderedPileList(combatState.Hand.Cards);
             // The exhaust pile was missing from this list while `exhaust_pile` and

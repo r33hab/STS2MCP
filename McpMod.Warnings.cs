@@ -91,10 +91,14 @@ public static partial class McpMod
     /// Wraps the singleplayer builder so every one of its ~20 return paths carries the
     /// warnings; stamping them inside the builder would miss the early menu/FTUE returns.
     /// </summary>
-    private static Dictionary<string, object?> BuildGameState()
+    /// <param name="includeHiddenState">
+    /// Add the hidden-information fields. Only an opted-in GET passes true (WantsHiddenState);
+    /// every other read, including the wait=true settle loop, leaves them out.
+    /// </param>
+    private static Dictionary<string, object?> BuildGameState(bool includeHiddenState = false)
     {
         BeginStateWarnings();
-        var result = BuildGameStateCore();
+        var result = BuildGameStateCore(includeHiddenState);
         EndStateWarnings(result);
         return result;
     }

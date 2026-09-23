@@ -168,6 +168,14 @@ public static partial class McpMod
             || value.Equals("yes", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Whether a GET may carry hidden-information fields - what the game never shows the player,
+    /// such as the draw pile's true order and the run's seed. Both keys are needed: the conf's
+    /// allow_hidden_state, and the request's own `?hidden=1`. Only tests and capture tools ask.
+    /// </summary>
+    internal static bool WantsHiddenState(HttpListenerRequest request)
+        => _allowHiddenState && request.QueryString["hidden"] == "1";
+
     internal static void SendJson(HttpListenerResponse response, object data, bool pretty = false)
     {
         string json = JsonSerializer.Serialize(data, pretty ? _jsonOptionsPretty : _jsonOptions);

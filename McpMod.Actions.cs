@@ -100,6 +100,7 @@ public static partial class McpMod
             "crystal_sphere_set_tool" => ExecuteCrystalSphereSetTool(data),
             "crystal_sphere_click_cell" => ExecuteCrystalSphereClickCell(data),
             "crystal_sphere_proceed" => ExecuteCrystalSphereProceed(),
+            // Only reachable with allow_debug_actions: see IsDebugAction.
             "debug_start_encounter" => ExecuteDebugStartEncounter(data),
             "debug_start_event" => ExecuteDebugStartEvent(data),
             "debug_start_shop" => ExecuteDebugStartShop(),
@@ -116,6 +117,16 @@ public static partial class McpMod
             _ => Error($"Unknown action: {action}")
         };
     }
+
+    /// <summary>
+    /// The `debug_*` actions (McpMod.Debug.cs) rewrite the run instead of playing it: they add
+    /// cards, powers or max HP, set energy or stars, enchant or upgrade cards, and jump to a
+    /// chosen encounter, event, shop or act. HandlePostAction refuses every one of them with 403
+    /// unless STS2_MCP.conf sets allow_debug_actions, so a new debug action must keep the prefix.
+    /// return_to_main_menu is not one of them: it is the pause menu's own Save and Quit.
+    /// </summary>
+    internal static bool IsDebugAction(string action)
+        => action.StartsWith("debug_", System.StringComparison.Ordinal);
 
     /// <summary>
     /// Reads an integer parameter, accepting any of the given names.
