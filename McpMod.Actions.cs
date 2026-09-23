@@ -87,6 +87,19 @@ public static partial class McpMod
             "crystal_sphere_set_tool" => ExecuteCrystalSphereSetTool(data),
             "crystal_sphere_click_cell" => ExecuteCrystalSphereClickCell(data),
             "crystal_sphere_proceed" => ExecuteCrystalSphereProceed(),
+            "debug_start_encounter" => ExecuteDebugStartEncounter(data),
+            "debug_start_event" => ExecuteDebugStartEvent(data),
+            "debug_start_shop" => ExecuteDebugStartShop(),
+            "debug_force_play_phase" => ExecuteDebugForcePlayPhase(player),
+            "debug_add_card" => ExecuteDebugAddCard(player, data),
+            "debug_set_energy" => ExecuteDebugSetEnergy(player, data),
+            "debug_set_stars" => ExecuteDebugSetStars(player, data),
+            "debug_add_power" => ExecuteDebugAddPower(player, data),
+            "debug_enchant_card" => ExecuteDebugEnchantCard(player, data),
+            "debug_enter_next_act" => ExecuteDebugEnterNextAct(),
+            "debug_gain_max_hp" => ExecuteDebugGainMaxHp(player, data),
+            "debug_upgrade_deck" => ExecuteDebugUpgradeDeck(player),
+            "return_to_main_menu" => ExecuteReturnToMainMenu(),
             _ => Error($"Unknown action: {action}")
         };
     }
@@ -1282,6 +1295,13 @@ public static partial class McpMod
         if (loadLobby != null && IsNodeVisible(loadLobby))
         {
             return ExecuteLoadLobbyMenuOption(loadLobby, option);
+        }
+
+        // Custom-run screen (seeded runs) — mounted separately like character select.
+        var customRun = FindFirst<MegaCrit.Sts2.Core.Nodes.Screens.CustomRun.NCustomRunScreen>(tree.Root);
+        if (customRun != null && IsNodeVisible(customRun))
+        {
+            return ExecuteCustomRunMenuOption(customRun, option, seed);
         }
 
         // Character select can outlive or be mounted separately from NMainMenu,

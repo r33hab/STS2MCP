@@ -63,6 +63,10 @@ public static partial class McpMod
         var result = new Dictionary<string, object?>();
         var tree = (Godot.Engine.GetMainLoop()) as SceneTree;
 
+        // Completed async room entries. A harness embarking runs back to back waits for
+        // this to advance before touching the run again — see TrackRoomEntries.
+        result["rooms_entered"] = RoomsEntered;
+
         if (tree?.Root != null)
         {
             var ftueState = BuildVisibleFtueState(tree.Root);
@@ -191,6 +195,16 @@ public static partial class McpMod
                     if (loadLobby != null && IsNodeVisible(loadLobby))
                     {
                         AddMultiplayerLoadLobbyMenuState(result, loadLobby);
+                    }
+                }
+
+                // Custom-run screen (seeded runs) — mounted separately like char select.
+                if (result.ContainsKey("menu_screen") == false)
+                {
+                    var customRun = FindFirst<MegaCrit.Sts2.Core.Nodes.Screens.CustomRun.NCustomRunScreen>(tree.Root);
+                    if (customRun != null && IsNodeVisible(customRun))
+                    {
+                        AddCustomRunMenuState(result, customRun);
                     }
                 }
 
@@ -620,6 +634,55 @@ public static partial class McpMod
         return result;
     }
 
+    private static void AddCustomRunMenuState(
+        Dictionary<string, object?> result,
+        MegaCrit.Sts2.Core.Nodes.Screens.CustomRun.NCustomRunScreen customRun)
+    {
+        // Report as "character_select" so existing menu flows work; flag custom_run
+        // and surface the current seed + ascension the custom screen exposes.
+        result["state_type"] = "menu";
+        result["menu_screen"] = "character_select";
+        result["message"] = "Select a character (custom run).";
+        result["custom_run"] = true;
+
+        var options = new List<Dictionary<string, object?>>();
+        var characters = new List<Dictionary<string, object?>>();
+        foreach (var btn in FindAll<NCharacterSelectButton>(customRun))
+        {
+            try
+            {
+                if (btn.Character is { } cm && IsNodeVisible(btn))
+                {
+                    options.Add(new Dictionary<string, object?> { ["name"] = cm.Id.Entry, ["enabled"] = !btn.IsLocked });
+                    characters.Add(new Dictionary<string, object?>
+                    {
+                        ["name"] = SafeGetText(() => cm.Title),
+                        ["id"] = cm.Id.Entry,
+                        ["locked"] = btn.IsLocked,
+                        ["hp"] = cm.StartingHp,
+                    });
+                }
+            }
+            catch { }
+        }
+        result["characters"] = characters;
+        result["options"] = options;
+
+        try
+        {
+            if (GetInstanceFieldValue(customRun, "_ascensionPanel")
+                is MegaCrit.Sts2.Core.Nodes.Screens.CharacterSelect.NAscensionPanel panel)
+                result["ascension"] = panel.Ascension;
+        }
+        catch { }
+        try
+        {
+            if (GetInstanceFieldValue(customRun, "_seedInput") is Godot.LineEdit seedInput)
+                result["seed_input"] = seedInput.Text;
+        }
+        catch { }
+    }
+
     private static void AddCharacterSelectMenuState(
         Dictionary<string, object?> result,
         NCharacterSelectScreen charSelect)
@@ -780,7 +843,7 @@ public static partial class McpMod
                 _ => lobby.NetService.Type.ToString().ToLowerInvariant()
             },
             ["game_mode"] = lobby.GameMode.ToString().ToLowerInvariant(),
-            ["max_players"] = lobby.MaxPlayers,
+            ["max_players"] = SafeMaxPlayers(lobby),
             ["ascension"] = lobby.Ascension,
             ["max_ascension"] = lobby.MaxAscension,
             ["all_ready"] = lobby.Players.Count > 0 && lobby.Players.All(p => p.isReady),
@@ -835,6 +898,63 @@ public static partial class McpMod
     {
         try { return lobby.IsAboutToBeginGame(); }
         catch { return false; }
+    }
+
+    // v0.111 renamed LoadRunLobby.ConnectedPlayerIds to PlayerIds; v0.107.1 has only the
+    // old name. Both are read by reflection so ONE source tree compiles and runs against
+    // either install -- the mod builds against sts2.dll from the game directory, so a
+    // hard-coded member name is a build break on whichever version you are not on.
+    private static HashSet<ulong>? SafeConnectedPlayerIds(LoadRunLobby lobby)
+    {
+        try
+        {
+            // Property first, then field, for each name. Which of the two a version uses
+            // is not knowable from the other install -- v0.107.1 has ConnectedPlayerIds
+            // as a property, and nothing here can see what shape v0.111 gave PlayerIds.
+            var ids = GetInstanceMemberValue(lobby, "PlayerIds")
+                ?? GetInstanceMemberValue(lobby, "ConnectedPlayerIds");
+            return ids switch
+            {
+                HashSet<ulong> set => set,
+                IEnumerable<ulong> seq => seq.ToHashSet(),
+                // A differently-typed id collection still yields ulongs one box at a time.
+                System.Collections.IEnumerable seq => seq
+                    .Cast<object?>()
+                    .Where(o => o is not null)
+                    .Select(o => Convert.ToUInt64(o))
+                    .ToHashSet(),
+                _ => null,
+            };
+        }
+        catch { return null; }
+    }
+
+    // v0.111's PlayerCount, falling back to the size of the id set on v0.107.1.
+    private static int SafeConnectedPlayerCount(LoadRunLobby lobby)
+    {
+        try
+        {
+            // Any integral width, not just int: the fallback below is correct anyway, but
+            // silently taking it because the property was a uint would be a shame.
+            if (GetInstanceMemberValue(lobby, "PlayerCount") is object raw and (int or uint or long or ulong or short or ushort or byte))
+                return Convert.ToInt32(raw);
+        }
+        catch { }
+        return SafeConnectedPlayerIds(lobby)?.Count ?? 0;
+    }
+
+    // v0.111 made StartRunLobby.MaxPlayers a private field, so read _maxPlayers directly.
+    // Players.Count is the fallback: it is the seated count, not the capacity, but a
+    // lobby that cannot be read at all is worse than one reporting a low ceiling.
+    private static int SafeMaxPlayers(StartRunLobby lobby)
+    {
+        try
+        {
+            if (GetInstanceFieldValue(lobby, "_maxPlayers") is int maxPlayers)
+                return maxPlayers;
+        }
+        catch { }
+        return lobby.Players?.Count ?? 0;
     }
 
     private static string? SafeGetPlayerName(PlatformType platform, ulong playerId)
@@ -970,16 +1090,17 @@ public static partial class McpMod
             catch { }
 
             info["expected_player_count"] = lobby.Run?.Players?.Count ?? 0;
-            info["connected_player_count"] = lobby.ConnectedPlayerIds?.Count ?? 0;
+            info["connected_player_count"] = SafeConnectedPlayerCount(lobby);
 
-            // LoadRunLobby no longer exposes IsAboutToBeginGame in the public game API,
-            // so derive the same readiness summary from connected players and ready flags.
+            // Derive the readiness summary from connected players and ready flags. v0.111
+            // exposes LoadRunLobby.IsAboutToBeginGame() again, but this reconstruction is
+            // kept because it survived v0.107 hiding it and still agrees with the game.
             // Without these fields, FormatLobbyMarkdown printed "All ready: false" unconditionally for load lobbies.
             bool aboutToBegin = false;
             try
             {
                 var runPlayers = lobby.Run?.Players;
-                var connectedPlayerIds = lobby.ConnectedPlayerIds;
+                var connectedPlayerIds = SafeConnectedPlayerIds(lobby);
                 aboutToBegin = runPlayers != null
                     && connectedPlayerIds != null
                     && runPlayers.Count > 0
@@ -997,7 +1118,7 @@ public static partial class McpMod
                 {
                     foreach (var sp in lobby.Run.Players)
                     {
-                        bool isConnected = lobby.ConnectedPlayerIds?.Contains(sp.NetId) ?? false;
+                        bool isConnected = SafeConnectedPlayerIds(lobby)?.Contains(sp.NetId) ?? false;
                         bool isReady = false;
                         try { isReady = lobby.IsPlayerReady(sp.NetId); } catch { }
                         players.Add(new Dictionary<string, object?>
@@ -1086,6 +1207,24 @@ public static partial class McpMod
         }
         battle["enemies"] = enemies;
 
+        // FORK ADDITION — the player's side of the board. Only `enemies` was reported, so
+        // Osty was invisible to anything reading this: a Necrobinder capture could not see
+        // the pet at all, and the character's whole mechanic could not be verified. Built
+        // with the same shape as an enemy so a consumer can treat them alike.
+        var allies = new List<Dictionary<string, object?>>();
+        var allyCounts = new Dictionary<string, int>();
+        foreach (var creature in combatState.Allies)
+        {
+            // The player's own creature is already reported under `player`; what is new
+            // here is the pets, which nothing else exposes.
+            if (creature.IsAlive && !creature.IsPlayer)
+            {
+                allies.Add(BuildEnemyState(creature, allyCounts));
+            }
+        }
+
+        battle["allies"] = allies;
+
         return battle;
     }
 
@@ -1099,6 +1238,31 @@ public static partial class McpMod
         state["hp"] = creature.CurrentHp;
         state["max_hp"] = creature.MaxHp;
         state["block"] = creature.Block;
+
+        // The run deck, which is not a combat pile and so was reported nowhere: on every
+        // screen the piles below are empty, and the deck is exactly what the screens that
+        // matter outside combat act on. An event that transforms, upgrades, adds or
+        // removes a card was invisible to any harness reading this state, and so was the
+        // deck an agent is supposed to be building.
+        try
+        {
+            var deck = new List<Dictionary<string, object?>>();
+            int deckIndex = 0;
+            foreach (var card in CardPile.Get(PileType.Deck, player).Cards)
+            {
+                var info = BuildCardInfo(card, PileType.Deck);
+                info["index"] = deckIndex;
+                deck.Add(info);
+                deckIndex++;
+            }
+
+            state["deck"] = deck;
+        }
+        catch (Exception)
+        {
+            // A screen with no deck to read is not an error worth failing the whole
+            // state over; the field is simply absent.
+        }
 
         // PlayerCombatState can linger after combat while on map/rest/shop. Energy/MaxEnergy getters
         // run hooks (e.g. Hook.ModifyMaxEnergy) that null-ref without a live combat - only serialize
@@ -1137,6 +1301,21 @@ public static partial class McpMod
             state["draw_pile"] = BuildPileCardList(drawCards, PileType.Draw);
             state["discard_pile"] = BuildPileCardList(combatState.DiscardPile.Cards, PileType.Discard);
             state["exhaust_pile"] = BuildPileCardList(combatState.ExhaustPile.Cards, PileType.Exhaust);
+
+            // FORK ADDITION — true pile order (index 0 = top of pile, drawn next), with
+            // raw entry ids rather than localized titles. `draw_pile` above is sorted by
+            // rarity/id to match the in-game display, so it cannot be used to compare
+            // card *sequences* against the emulator. Used by the draw-pile differential
+            // test; keep both, since existing consumers rely on the sorted view.
+            state["draw_pile_ordered"] = BuildOrderedPileList(combatState.DrawPile.Cards);
+            state["discard_pile_ordered"] = BuildOrderedPileList(combatState.DiscardPile.Cards);
+            state["hand_ordered"] = BuildOrderedPileList(combatState.Hand.Cards);
+            // The exhaust pile was missing from this list while `exhaust_pile` and
+            // `exhaust_pile_count` both reported it, so a capture recorded an empty
+            // ordered exhaust however many cards were really in it. Cards that read the
+            // pile's SIZE -- Ashen Strike scales its damage off it -- would have been
+            // captured against a board the fixture could not rebuild.
+            state["exhaust_pile_ordered"] = BuildOrderedPileList(combatState.ExhaustPile.Cards);
 
             // Orbs
             var orbQueue = combatState.OrbQueue;
@@ -1312,6 +1491,22 @@ public static partial class McpMod
                 ["cost"] = GetCostDisplay(card),
                 ["star_cost"] = GetStarCostDisplay(card),
                 ["description"] = SafeGetCardDescription(card, pile)
+            });
+        }
+        return list;
+    }
+
+    // FORK ADDITION — see the draw_pile_ordered call site. Raw entry ids in true pile
+    // order, deliberately minimal so the readout is stable and cheap to diff.
+    private static List<Dictionary<string, object?>> BuildOrderedPileList(IEnumerable<CardModel> cards)
+    {
+        var list = new List<Dictionary<string, object?>>();
+        foreach (var card in cards)
+        {
+            list.Add(new Dictionary<string, object?>
+            {
+                ["id"] = card.Id.Entry,
+                ["is_upgraded"] = card.IsUpgraded
             });
         }
         return list;

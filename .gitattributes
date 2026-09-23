@@ -1,0 +1,2 @@
+# Convert all files to use "\n" line endings.
+* text=auto eol=lf

@@ -85,6 +85,9 @@ public static partial class McpMod
             // Optional settings UI patches should not block the HTTP bridge itself.
             TryApplyHarmonyPatches();
 
+            // Expose a completion signal for async room entry; see TrackRoomEntries.
+            TrackRoomEntries();
+
             // Connect to main thread process frame for action execution
             var tree = (SceneTree)Engine.GetMainLoop();
             tree.Connect(SceneTree.SignalName.ProcessFrame, Callable.From(ProcessMainThreadQueue));

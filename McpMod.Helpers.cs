@@ -178,6 +178,33 @@ public static partial class McpMod
         return null;
     }
 
+    // The property twin of GetInstanceFieldValue, for game members that are properties on
+    // one version and renamed or hidden on the next. Returns null rather than throwing so
+    // a caller can try several names in order.
+    // A game member that moves between versions can also change KIND -- what is a property
+    // on one build is a field on the next. Callers that only need the value should ask for
+    // it this way rather than committing to either.
+    private static object? GetInstanceMemberValue(object source, string memberName) =>
+        GetInstancePropertyValue(source, memberName) ?? GetInstanceFieldValue(source, memberName);
+
+    private static object? GetInstancePropertyValue(object source, string propertyName)
+    {
+        const System.Reflection.BindingFlags Flags =
+            System.Reflection.BindingFlags.Instance |
+            System.Reflection.BindingFlags.Public |
+            System.Reflection.BindingFlags.NonPublic |
+            System.Reflection.BindingFlags.DeclaredOnly;
+
+        for (var type = source.GetType(); type != null; type = type.BaseType)
+        {
+            var property = type.GetProperty(propertyName, Flags);
+            if (property != null && property.CanRead)
+                return property.GetValue(source);
+        }
+
+        return null;
+    }
+
     private static void AddMenuOptionIfVisible(
         List<Dictionary<string, object?>> options,
         object owner,
