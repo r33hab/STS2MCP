@@ -16,9 +16,22 @@ public static partial class McpMod
     private static Dictionary<string, object?> ExecuteCustomRunMenuOption(
         NCustomRunScreen screen,
         string option,
-        string? seed)
+        string? seed,
+        int? ascension = null)
     {
         bool Is(string s) => string.Equals(option, s, StringComparison.OrdinalIgnoreCase);
+
+        // MERGE: cat's menu_select `ascension` parameter (83053d9) applies here too, exactly as
+        // on the standard character select: before the option, alone or alongside a pick or
+        // confirm. The older `option:"ascension", seed:"<level>"` form below still works.
+        if (ascension != null)
+        {
+            var ascensionResult = ApplyAscension(screen, ascension.Value);
+            if ((string?)ascensionResult["status"] == "error")
+                return ascensionResult;
+            if (string.IsNullOrEmpty(option))
+                return ascensionResult;
+        }
 
         if (Is("back"))
         {

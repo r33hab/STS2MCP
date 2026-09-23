@@ -5,11 +5,13 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 using Godot;
+using MegaCrit.Sts2.Core.CardSelection;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.HoverTips;
 using MegaCrit.Sts2.Core.Models;
 using MegaCrit.Sts2.Core.Nodes.CommonUi;
 using MegaCrit.Sts2.Core.Nodes.GodotExtensions;
+using MegaCrit.Sts2.Core.Nodes.Screens.CardSelection;
 using MegaCrit.Sts2.Core.Nodes.Screens.Map;
 
 namespace STS2_MCP;
@@ -48,7 +50,11 @@ public static partial class McpMod
     private static string? SafeGetCardDescription(CardModel card, PileType pile = PileType.Hand)
     {
         try { return StripRichTextTags(card.GetDescriptionForPile(pile)).Replace("\n", " "); }
-        catch { return SafeGetText(() => card.Description)?.Replace("\n", " "); }
+        catch (Exception ex)
+        {
+            Warn("card.description", ex);
+            return SafeGetText(() => card.Description)?.Replace("\n", " ");
+        }
     }
 
     private static CardModel? SafeBuildUpgradedCardPreview(CardModel card)
@@ -64,8 +70,9 @@ public static partial class McpMod
             preview.UpgradeInternal();
             return preview;
         }
-        catch
+        catch (Exception ex)
         {
+            Warn("card.upgrade_preview", ex);
             return null;
         }
     }
@@ -81,7 +88,11 @@ public static partial class McpMod
             : null;
     }
 
-    internal static string? SafeGetText(Func<object?> getter)
+    // The caller's name stands in for a field name: this helper reads a few hundred
+    // different things per state and "text: NullReferenceException" alone names none of
+    // them. Warnings are de-duplicated, so the volume of calls costs at most one entry.
+    internal static string? SafeGetText(Func<object?> getter,
+        [CallerMemberName] string caller = "")
     {
         try
         {
@@ -92,7 +103,7 @@ public static partial class McpMod
                 return StripRichTextTags(locString.GetFormattedText());
             return result.ToString();
         }
-        catch { return null; }
+        catch (Exception ex) { Warn($"text in {caller}", ex); return null; }
     }
 
     internal static string StripRichTextTags(string text)
@@ -130,9 +141,36 @@ public static partial class McpMod
         return sb.ToString();
     }
 
-    internal static void SendJson(HttpListenerResponse response, object data)
+    // The preference is passed down from the request rather than kept in a thread-static or
+    // global flag: requests are served concurrently on ThreadPool threads.
+    internal static bool WantsPretty(HttpListenerRequest request)
     {
-        string json = JsonSerializer.Serialize(data, _jsonOptions);
+        var query = request.QueryString;
+        string? value = query["pretty"];
+        if (value == null)
+        {
+            // "?pretty" without "=" has no name, so NameValueCollection files it under the
+            // null key, joining several such parameters with commas.
+            string? valueless = query[null];
+            if (valueless == null)
+                return false;
+            foreach (string part in valueless.Split(','))
+            {
+                if (part.Trim().Equals("pretty", StringComparison.OrdinalIgnoreCase))
+                    return true;
+            }
+            return false;
+        }
+
+        return value.Length == 0
+            || value.Equals("1", StringComparison.Ordinal)
+            || value.Equals("true", StringComparison.OrdinalIgnoreCase)
+            || value.Equals("yes", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static void SendJson(HttpListenerResponse response, object data, bool pretty = false)
+    {
+        string json = JsonSerializer.Serialize(data, pretty ? _jsonOptionsPretty : _jsonOptions);
         byte[] buffer = Encoding.UTF8.GetBytes(json);
         response.ContentType = "application/json; charset=utf-8";
         response.ContentLength64 = buffer.Length;
@@ -149,15 +187,53 @@ public static partial class McpMod
         response.Close();
     }
 
-    internal static void SendError(HttpListenerResponse response, int statusCode, string message)
+    internal static void SendError(
+        HttpListenerResponse response, int statusCode, string message, bool pretty = false)
     {
         response.StatusCode = statusCode;
-        SendJson(response, new Dictionary<string, object?> { ["error"] = message });
+        // "status" is carried here too so a client never has to branch on the HTTP code:
+        // transport-level failures (bad JSON, unknown route, wrong method) read exactly
+        // like the action-level failures produced by Error().
+        SendJson(response, new Dictionary<string, object?>
+        {
+            ["status"] = "error",
+            ["error"] = message
+        }, pretty);
+    }
+
+    /// <summary>
+    /// 503 for "the game's main thread never picked this up". `retry: true` is the contract:
+    /// the request was not executed, so a client may safely send it again - unlike a 500, where
+    /// the action ran and failed.
+    /// </summary>
+    internal static void SendUnavailable(
+        HttpListenerResponse response, string message, bool pretty = false)
+    {
+        response.StatusCode = 503;
+        SendJson(response, new Dictionary<string, object?>
+        {
+            ["error"] = message,
+            ["status"] = "error",
+            ["retry"] = true
+        }, pretty);
     }
 
     private static Dictionary<string, object?> Error(string message)
     {
         return new Dictionary<string, object?> { ["status"] = "error", ["error"] = message };
+    }
+
+    /// <summary>
+    /// Last line of defence for the POST contract: every action result must carry
+    /// "status". A future action that forgets it would silently break clients that
+    /// branch on that key alone, so the value is derived here from the presence of
+    /// "error" rather than left missing.
+    /// </summary>
+    private static Dictionary<string, object?> EnsureStatus(Dictionary<string, object?> result)
+    {
+        if (!result.ContainsKey("status"))
+            result["status"] = result.ContainsKey("error") ? "error" : "ok";
+        return result;
     }
 
     private static object? GetInstanceFieldValue(object source, string fieldName)
@@ -224,7 +300,120 @@ public static partial class McpMod
                 });
             }
         }
-        catch { }
+        catch (Exception ex) { Warn($"options.{label}", ex); }
+    }
+
+    // ---- Grid card selection (NCardGridSelectionScreen and its subclasses) -------------
+    //
+    // Every subclass follows the same two-step shape: click cards in the grid, then a
+    // *preview* panel opens and its own Confirm applies the selection. The screens do not
+    // share a base member for any of it - each declares its own `_selectedCards` /
+    // `_prefs` fields and names its preview container differently in the scene - so the
+    // helpers below are the one place that knows all the spellings.
+    //
+    // Getting the preview container wrong is what A-7 was: the enchant screen's containers
+    // were missing from the list, so `confirm_selection` fell through to the screen's main
+    // Confirm, which on these screens means "open the preview" (PreviewSelection), not
+    // "apply". Pressing it while the preview was already open re-ran PreviewSelection and
+    // appended a second copy of every selected card to the preview row.
+
+    /// <summary>
+    /// Preview container node names across the NCardGridSelectionScreen subclasses:
+    /// upgrade uses %Upgrade*PreviewContainer, enchant %Enchant*PreviewContainer, and
+    /// remove/transform the generic %PreviewContainer. Only one is ever visible.
+    /// </summary>
+    private static readonly string[] CardSelectPreviewContainerNames =
+    {
+        "%UpgradeSinglePreviewContainer",
+        "%UpgradeMultiPreviewContainer",
+        "%EnchantSinglePreviewContainer",
+        "%EnchantMultiPreviewContainer",
+        "%PreviewContainer",
+    };
+
+    /// <summary>The preview panel currently covering the grid, or null when the screen is
+    /// still in its card-picking step.</summary>
+    internal static Control? FindVisibleCardSelectPreview(NCardGridSelectionScreen screen)
+    {
+        foreach (var name in CardSelectPreviewContainerNames)
+        {
+            try
+            {
+                var container = screen.GetNodeOrNull<Control>(name);
+                if (container?.Visible == true)
+                    return container;
+            }
+            catch (ObjectDisposedException) { }
+        }
+        return null;
+    }
+
+    /// <summary>Every visible preview container, for the state's preview card list.</summary>
+    internal static List<Control> FindCardSelectPreviewContainers(NCardGridSelectionScreen screen)
+    {
+        var found = new List<Control>();
+        foreach (var name in CardSelectPreviewContainerNames)
+        {
+            try
+            {
+                var container = screen.GetNodeOrNull<Control>(name);
+                if (container?.Visible == true)
+                    found.Add(container);
+            }
+            catch (ObjectDisposedException) { }
+        }
+        return found;
+    }
+
+    /// <summary>The button that applies a previewed selection. Named "Confirm" in the
+    /// upgrade/enchant/transform scenes and "%PreviewConfirm" in the remove scene.</summary>
+    internal static NConfirmButton? GetCardSelectPreviewConfirm(Control container)
+        => container.GetNodeOrNull<NConfirmButton>("Confirm")
+           ?? container.GetNodeOrNull<NConfirmButton>("%PreviewConfirm");
+
+    /// <summary>The button that drops a previewed selection and returns to the grid.</summary>
+    internal static NBackButton? GetCardSelectPreviewCancel(Control container)
+        => container.GetNodeOrNull<NBackButton>("Cancel")
+           ?? container.GetNodeOrNull<NBackButton>("%PreviewCancel");
+
+    /// <summary>The screen's own Confirm, below the grid. On most of these screens it
+    /// opens the preview rather than applying anything.</summary>
+    internal static NConfirmButton? GetCardSelectMainConfirm(NCardGridSelectionScreen screen)
+        => screen.GetNodeOrNull<NConfirmButton>("Confirm")
+           ?? screen.GetNodeOrNull<NConfirmButton>("%Confirm");
+
+    /// <summary>
+    /// The cards the screen currently has selected. Every subclass keeps them in its own
+    /// private `_selectedCards` HashSet - the same set OnCardClicked toggles - so this is
+    /// the game's own answer, not a guess reconstructed from highlights.
+    /// Null means the field could not be read (a renamed field in a future game build).
+    /// </summary>
+    internal static HashSet<CardModel>? GetCardSelectSelection(NCardGridSelectionScreen screen)
+    {
+        try
+        {
+            return GetInstanceFieldValue(screen, "_selectedCards") as HashSet<CardModel>;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// How many cards the screen wants: `_prefs` carries MinSelect/MaxSelect, which is what
+    /// the game itself checks before it will complete the selection.
+    /// </summary>
+    internal static CardSelectorPrefs? GetCardSelectPrefs(NCardGridSelectionScreen screen)
+    {
+        try
+        {
+            return GetInstanceFieldValue(screen, "_prefs") as CardSelectorPrefs?;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
     }
 
     internal static List<T> FindAll<T>(Node start) where T : Node
@@ -263,7 +452,44 @@ public static partial class McpMod
             foreach (var child in node.GetChildren())
                 FindAllRecursive(child, found);
         }
+        // Every `catch (ObjectDisposedException)` in this file's node walkers is left out
+        // of the state warnings on purpose: nodes are freed continuously while a scene
+        // transitions, so hitting a dead one is the normal reading, not a broken field.
         catch (ObjectDisposedException) { }
+    }
+
+    /// <summary>
+    /// Last-resort description for a hover tip whose own text is empty: ask the model
+    /// the tip points at. PowerModel/RelicModel/CardModel each expose their own text
+    /// under a different name, so try them in order of specificity.
+    /// </summary>
+    private static string? DescribeCanonicalModel(IHoverTip tip)
+    {
+        object? model;
+        try { model = tip.CanonicalModel; }
+        catch (Exception ex) { Warn("keywords.canonical_model", ex); return null; }
+        if (model == null) return null;
+
+        foreach (var propertyName in new[] { "SmartDescription", "DynamicDescription", "Description" })
+        {
+            try
+            {
+                var property = model.GetType().GetProperty(propertyName);
+                if (property == null) continue;
+                var value = property.GetValue(model);
+                if (value == null) continue;
+                var raw = value.ToString();
+                if (string.IsNullOrWhiteSpace(raw)) continue;
+                var text = StripRichTextTags(raw);
+                if (!string.IsNullOrWhiteSpace(text))
+                    return text;
+            }
+            // Left silent: this loop exists to try candidate property names until one
+            // works, so a throw on the way is a step in the search, not a lost field.
+            catch { }
+        }
+
+        return null;
     }
 
     private static List<Dictionary<string, object?>> BuildHoverTips(IEnumerable<IHoverTip> tips)
@@ -290,21 +516,36 @@ public static partial class McpMod
                         description = SafeGetCardDescription(cardTip.Card);
                     }
 
+                    // Some keywords ship with no description text at all (Sly is one),
+                    // and some describe themselves in terms of themselves. Fall back to
+                    // the canonical model the tip points at, which carries the real
+                    // effect text, before giving up.
+                    if (string.IsNullOrWhiteSpace(description))
+                        description = DescribeCanonicalModel(tip);
+
                     if (title == null && description == null) continue;
 
                     string key = title ?? description!;
                     if (!seen.Add(key)) continue;
 
-                    result.Add(new Dictionary<string, object?>
+                    var entry = new Dictionary<string, object?>
                     {
                         ["name"] = title,
                         ["description"] = description
-                    });
+                    };
+
+                    string? tipId = SafeGetText(() => tip.Id);
+                    if (!string.IsNullOrWhiteSpace(tipId))
+                        entry["id"] = tipId;
+                    if (string.IsNullOrWhiteSpace(description))
+                        entry["description_missing"] = true;
+
+                    result.Add(entry);
                 }
-                catch { /* skip individual tip on error */ }
+                catch (Exception ex) { Warn("keywords.tip", ex); }
             }
         }
-        catch { /* return partial results */ }
+        catch (Exception ex) { Warn("keywords", ex); }
         return result;
     }
 
@@ -467,34 +708,30 @@ public static partial class McpMod
         var tutorialFtue = FindVisibleAcceptTutorialsFtue(root);
         if (tutorialFtue != null && IsFtueNodeActive(tutorialFtue))
         {
-            return new Dictionary<string, object?>
+            var state = NewStateResult("menu");
+            state["menu_screen"] = "tutorial_prompt";
+            state["message"] = "Enable Tutorials? Choose yes or no.";
+            state["options"] = new List<Dictionary<string, object?>>
             {
-                ["state_type"] = "menu",
-                ["menu_screen"] = "tutorial_prompt",
-                ["message"] = "Enable Tutorials? Choose yes or no.",
-                ["options"] = new List<Dictionary<string, object?>>
-                {
-                    new() { ["name"] = "no", ["enabled"] = true },
-                    new() { ["name"] = "yes", ["enabled"] = true }
-                }
+                new() { ["name"] = "no", ["enabled"] = true },
+                new() { ["name"] = "yes", ["enabled"] = true }
             };
+            return state;
         }
 
         var ftue = FindVisibleGenericFtue(root);
         if (ftue != null)
         {
             var canAdvance = FindFtueAdvanceButton(ftue) != null;
-            return new Dictionary<string, object?>
+            var state = NewStateResult("menu");
+            state["menu_screen"] = "tutorial";
+            state["message"] = "Tutorial popup active. Use advance to dismiss.";
+            state["options"] = new List<Dictionary<string, object?>>
             {
-                ["state_type"] = "menu",
-                ["menu_screen"] = "tutorial",
-                ["message"] = "Tutorial popup active. Use advance to dismiss.",
-                ["options"] = new List<Dictionary<string, object?>>
-                {
-                    new() { ["name"] = "advance", ["enabled"] = canAdvance },
-                    new() { ["name"] = "proceed", ["enabled"] = canAdvance }
-                }
+                new() { ["name"] = "advance", ["enabled"] = canAdvance },
+                new() { ["name"] = "proceed", ["enabled"] = canAdvance }
             };
+            return state;
         }
 
         var popup = BuildVisiblePopupState(root);
@@ -524,14 +761,12 @@ public static partial class McpMod
         if (stateOptions.Count == 0)
             return null;
 
-        return new Dictionary<string, object?>
-        {
-            ["state_type"] = "menu",
-            ["menu_screen"] = "popup",
-            ["message"] = popup != null ? GetVerticalPopupText(popup, "TitleLabel") ?? "Popup active." : "Popup active.",
-            ["body"] = popup != null ? GetVerticalPopupText(popup, "BodyLabel") : null,
-            ["options"] = stateOptions
-        };
+        var state = NewStateResult("menu");
+        state["menu_screen"] = "popup";
+        state["message"] = popup != null ? GetVerticalPopupText(popup, "TitleLabel") ?? "Popup active." : "Popup active.";
+        state["body"] = popup != null ? GetVerticalPopupText(popup, "BodyLabel") : null;
+        state["options"] = stateOptions;
+        return state;
     }
 
     private static MegaCrit.Sts2.Core.Nodes.Ftue.NAcceptTutorialsFtue? FindVisibleAcceptTutorialsFtue(Node root)

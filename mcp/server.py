@@ -46,7 +46,10 @@ def _profiles_url() -> str:
 def _get_client() -> httpx.AsyncClient:
     global _http
     if _http is None:
-        _http = httpx.AsyncClient(timeout=httpx.Timeout(10), trust_env=_trust_env)
+        # Must exceed the mod's own 10 s main-thread timeout, otherwise the client gives up at
+        # the same moment the mod is about to answer 503 and the caller never learns that the
+        # request was NOT executed (and is therefore safe to retry).
+        _http = httpx.AsyncClient(timeout=httpx.Timeout(15), trust_env=_trust_env)
     return _http
 
 
@@ -56,8 +59,20 @@ async def _get(params: dict | None = None) -> str:
     return r.text
 
 
-async def _post(body: dict) -> str:
-    r = await _get_client().post(_sp_url(), json=body)
+async def _post(body: dict, wait: bool = False) -> str:
+    """POST a singleplayer action.
+
+    With wait=True the mod holds the response until the game has settled and embeds the
+    settled state, so the caller does not need a GET poll loop. That makes the request
+    outlive the shared 15 s client timeout, hence the per-request override: the mod's own
+    settle timeout is 10 s on top of the 10 s main-thread timeout.
+    """
+    if not wait:
+        r = await _get_client().post(_sp_url(), json=body)
+    else:
+        r = await _get_client().post(
+            _sp_url(), json={**body, "wait": True}, timeout=httpx.Timeout(35)
+        )
     r.raise_for_status()
     return r.text
 
@@ -86,10 +101,10 @@ async def _compendium_get() -> str:
     return r.text
 
 
-async def _wiki_get(query: str, item_type: str = "all", limit: int = 10) -> str:
+async def _wiki_get(query: str, item_type: str = "all", limit: int = 10, scope: str = "discovered") -> str:
     r = await _get_client().get(
         _wiki_url(),
-        params={"query": query, "item_type": item_type, "limit": limit},
+        params={"query": query, "item_type": item_type, "limit": limit, "scope": scope},
     )
     r.raise_for_status()
     return r.text
@@ -176,7 +191,7 @@ async def get_game_state(format: str = "markdown") -> str:
 
 
 @mcp.tool()
-async def menu_select(option: str, seed: str | None = None) -> str:
+async def menu_select(option: str, seed: str | None = None, ascension: int | None = None) -> str:
     """Select a visible menu option.
 
     Use with state_type "menu" or "game_over". Covers main-menu navigation,
@@ -184,6 +199,18 @@ async def menu_select(option: str, seed: str | None = None) -> str:
     multiplayer load lobby (resume saved co-op run), character select for SP
     and MP (with `unready` once readied in MP), profile switching, timeline
     controls, tutorial prompts, blocking popups, and game-over main-menu return.
+    On menu_screen "settings" (reported both on the main menu and mid-run) the
+    only option is "back", which closes the screen and returns to what was under it.
+
+    On menu_screen "pause" (the in-run pause menu, opened with open_pause_menu):
+      - "resume" (aliases back / close / continue) returns to the run.
+      - "settings" and "compendium" open screens that "back" leaves again.
+      - "give_up" (alias abandon) ABANDONS THE RUN PERMANENTLY. It opens the
+        game's confirmation popup, which the next state reports as menu_screen
+        "popup"; it is never auto-confirmed, so answer it with "yes" or "no".
+      - "save_and_quit" (alias main_menu) saves and returns to the main menu,
+        where "continue" resumes the run. "disconnect" appears in multiplayer.
+    On the screens the pause menu opens the only option is "back".
 
     Multiplayer flow tips:
       - On menu_screen "multiplayer_join", use refresh / back / join_<index> /
@@ -199,12 +226,54 @@ async def menu_select(option: str, seed: str | None = None) -> str:
             option is listed under blocked_options, selecting it returns the
             API's manual-action response instead of forcing UI entry.
         seed: Optional seed for supported embark flows. Standard mode rejects seeds.
+        ascension: Optional ascension level, applied on character select before the
+            option is handled. Send it with the character pick, with confirm/embark,
+            or on its own (with option ""). The current level and the unlocked
+            maximum are reported as `ascension` / `max_ascension` in state.
     """
     body: dict = {"action": "menu_select", "option": option}
     if seed is not None:
         body["seed"] = seed
+    if ascension is not None:
+        body["ascension"] = ascension
     try:
         return await _post(body)
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def open_pause_menu() -> str:
+    """Open the in-run pause menu (the top-bar gear / Esc).
+
+    This is the only API route out of a run: the state that follows is
+    state_type "menu", menu_screen "pause", and menu_select drives it from
+    there. Requires a run in progress; it answers `already_open: true` when the
+    menu is already up, and errors when another screen is stacked on top of it
+    (leave that with menu_select "back") or while a card is still being played.
+
+    WARNING: on that menu "give_up" abandons the run permanently (it asks for
+    confirmation first) and "save_and_quit" ends the session at the main menu.
+    """
+    try:
+        return await _post({"action": "open_pause_menu"})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def timeline_reveal_epochs() -> str:
+    """Reveal every obtained-but-unrevealed timeline epoch.
+
+    A finished run leaves its epochs "obtained". Until they are revealed the main
+    menu hides `singleplayer`, so no new run can be started. Call this from the
+    main menu and repeat until the response has `done: true`; `pending_epoch_ids`
+    shows what is left. It opens the Timeline, reveals each pending epoch through
+    the game's own reveal path (granting the epoch's unlocks and writing progress),
+    and returns to the main menu when finished.
+    """
+    try:
+        return await _post({"action": "timeline_reveal_epochs"})
     except Exception as e:
         return _handle_error(e)
 
@@ -239,22 +308,25 @@ async def get_compendium() -> str:
 
 
 @mcp.tool()
-async def search_wiki(query: str, item_type: str = "all", limit: int = 10) -> str:
-    """Search discovered card and relic wiki entries for the active profile.
+async def search_wiki(query: str, item_type: str = "all", limit: int = 10, scope: str = "discovered") -> str:
+    """Search card and relic wiki entries.
 
-    Uses fuzzy matching over profile-unlocked content only, so agents can ask
-    for a card or relic by approximate name without receiving the entire game
-    catalog. Card results include both base and upgraded variants when the card
-    can be upgraded.
+    Uses fuzzy matching so agents can ask for a card or relic by approximate
+    name without receiving the entire game catalog. Card results include both
+    base and upgraded variants when the card can be upgraded.
 
     Args:
         query: Search text such as "ironclad perfect strike" or "silver spoon".
         item_type: "all", "card", or "relic".
         limit: Maximum results to return. Defaults to 10; the mod clamps it to
             a bounded maximum.
+        scope: "discovered" (default) searches only what the active profile has
+            already seen. "all" searches the full catalog — use it when a card
+            or relic on offer generates something this profile has never held.
+            Every result carries a `discovered` flag either way.
     """
     try:
-        return await _wiki_get(query, item_type, limit)
+        return await _wiki_get(query, item_type, limit, scope)
     except Exception as e:
         return _handle_error(e)
 
@@ -326,20 +398,46 @@ async def delete_profile(profile_id: int) -> str:
 
 
 @mcp.tool()
-async def use_potion(slot: int, target: str | None = None) -> str:
+async def use_potion(slot: int, target: str | None = None, wait: bool = False) -> str:
     """Use a potion from the player's potion slots.
 
     Works both during and outside of combat. Combat-only potions require an active battle.
 
     Args:
-        slot: Potion slot index (as shown in game state).
-        target: Entity ID of the target enemy (e.g. "JAW_WORM_0"). Required for enemy-targeted potions.
+        slot: The belt slot from game state `player.potions[].slot` — not a position
+            in the potions list. After using the potion in slot 0, the remaining one
+            is still slot 1.
+        target: Target enemy, as either its entity_id ("JAW_WORM_0") or its combat_id
+            ("3"). Required for enemy-targeted potions unless exactly one enemy is
+            alive, in which case it is chosen automatically.
+        wait: Hold the response until the game has settled (animations, card
+            resolution and the redraw finished) and return the settled state with it,
+            instead of answering as soon as the action was dispatched. Saves a
+            follow-up get_game_state(). The reply adds `settled`, `changed`,
+            `waited_ms`, `polls` and `state`.
     """
     body: dict = {"action": "use_potion", "slot": slot}
     if target is not None:
         body["target"] = target
     try:
-        return await _post(body)
+        return await _post(body, wait=wait)
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def sell_potion(slot: int) -> str:
+    """Sell a potion to the merchant by using it on them.
+
+    Foul Potion's second mode is worth 100 gold. Only valid in a shop or fake
+    merchant, and only for potions that have a merchant interaction — shop state
+    lists those under `sellable_potions`.
+
+    Args:
+        slot: The belt slot from game state `player.potions[].slot`.
+    """
+    try:
+        return await _post({"action": "sell_potion", "slot": slot})
     except Exception as e:
         return _handle_error(e)
 
@@ -361,14 +459,21 @@ async def discard_potion(slot: int) -> str:
 
 
 @mcp.tool()
-async def proceed_to_map() -> str:
+async def proceed_to_map(wait: bool = False) -> str:
     """Proceed from the current screen to the map.
 
     Works from: rewards screen, rest site, shop, fake merchant.
     Does NOT work for events — use event_choose_option() with the Proceed option's index.
+
+    Args:
+        wait: Hold the response until the game has settled (animations, card
+            resolution and the redraw finished) and return the settled state with it,
+            instead of answering as soon as the action was dispatched. Saves a
+            follow-up get_game_state(). The reply adds `settled`, `changed`,
+            `waited_ms`, `polls` and `state`.
     """
     try:
-        return await _post({"action": "proceed"})
+        return await _post({"action": "proceed"}, wait=wait)
     except Exception as e:
         return _handle_error(e)
 
@@ -379,30 +484,60 @@ async def proceed_to_map() -> str:
 
 
 @mcp.tool()
-async def combat_play_card(card_index: int, target: str | None = None) -> str:
+async def combat_play_card(
+    card_index: int | None = None,
+    target: str | None = None,
+    card_uid: str | None = None,
+    wait: bool = False,
+) -> str:
     """[Combat] Play a card from the player's hand.
 
     Args:
         card_index: Index of the card in hand (0-based, as shown in game state).
-        target: Entity ID of the target enemy (e.g. "JAW_WORM_0"). Required for single-target cards.
+        target: Target enemy, as either its entity_id ("JAW_WORM_0") or its
+            combat_id ("3"). Required for single-target cards, except when only
+            one enemy is alive, in which case it is chosen automatically.
+        card_uid: The card's uid from game state (e.g. "STRIKE#2"). Preferred over
+            card_index: it identifies the card instance itself and stays valid for
+            the whole combat, so a multi-card plan does not need recomputing after
+            every play.
+        wait: Hold the response until the game has settled (animations, card
+            resolution and the redraw finished) and return the settled state with it,
+            instead of answering as soon as the action was dispatched. Saves a
+            follow-up get_game_state(). The reply adds `settled`, `changed`,
+            `waited_ms`, `polls` and `state`.
 
-    Note that the index can change as cards are played - playing a card will shift the indices of remaining cards in hand.
-    Refer to the latest game state for accurate indices. New cards are drawn to the right, so playing cards from right to left can help maintain more stable indices for remaining cards.
+    card_index is a position in the hand, so playing a card shifts the indices of
+    everything behind it; re-read state between plays if you use it.
     """
-    body: dict = {"action": "play_card", "card_index": card_index}
+    if card_uid is None and card_index is None:
+        return "Error: provide card_uid (preferred) or card_index."
+    body: dict = {"action": "play_card"}
+    if card_uid is not None:
+        body["card_uid"] = card_uid
+    if card_index is not None:
+        body["card_index"] = card_index
     if target is not None:
         body["target"] = target
     try:
-        return await _post(body)
+        return await _post(body, wait=wait)
     except Exception as e:
         return _handle_error(e)
 
 
 @mcp.tool()
-async def combat_end_turn() -> str:
-    """[Combat] End the player's current turn."""
+async def combat_end_turn(wait: bool = False) -> str:
+    """[Combat] End the player's current turn.
+
+    Args:
+        wait: Hold the response until the game has settled (animations, card
+            resolution and the redraw finished) and return the settled state with it,
+            instead of answering as soon as the action was dispatched. Saves a
+            follow-up get_game_state(). The reply adds `settled`, `changed`,
+            `waited_ms`, `polls` and `state`.
+    """
     try:
-        return await _post({"action": "end_turn"})
+        return await _post({"action": "end_turn"}, wait=wait)
     except Exception as e:
         return _handle_error(e)
 
@@ -480,9 +615,33 @@ async def rewards_pick_card(card_index: int) -> str:
 
 @mcp.tool()
 async def rewards_skip_card() -> str:
-    """[Rewards] Skip the card reward without selecting a card."""
+    """[Rewards] Skip the card reward without selecting a card.
+
+    Skips specifically — it picks the Skip option by id, not whichever button is
+    first. If a relic added its own alternative (see rewards_card_alternative),
+    skipping does NOT take it.
+    """
     try:
         return await _post({"action": "skip_card_reward"})
+    except Exception as e:
+        return _handle_error(e)
+
+
+@mcp.tool()
+async def rewards_card_alternative(option_id: str) -> str:
+    """[Rewards] Take one of the card reward's alternative options.
+
+    The options are listed in game state under card_reward.alternatives. "Skip" is
+    one of them; relics add others — Pael's Wing adds "SACRIFICE", which turns the
+    reward into progress towards a relic. Skipping does not count as sacrificing,
+    so use this rather than rewards_skip_card when you mean to take the relic's
+    option.
+
+    Args:
+        option_id: The option_id from card_reward.alternatives (e.g. "SACRIFICE").
+    """
+    try:
+        return await _post({"action": "select_card_reward_alternative", "option_id": option_id})
     except Exception as e:
         return _handle_error(e)
 
@@ -511,14 +670,27 @@ async def map_choose_node(node_index: int) -> str:
 
 
 @mcp.tool()
-async def rest_choose_option(option_index: int) -> str:
-    """[Rest Site] Choose a rest site option (rest, smith, etc.).
+async def rest_choose_option(
+    option_index: int | None = None,
+    option_id: str | None = None,
+) -> str:
+    """[Rest Site] Choose a rest site option (rest, smith, dig, etc.).
+
+    Prefer option_id: relics add options (Shovel's DIG, Girya, the Byrdonis egg),
+    so the id says what you meant while a bare index is only meaningful against
+    the state read you took it from.
 
     Args:
-        option_index: 0-based index of the option from the rest site state.
+        option_id: The id from rest_site.options[].id (e.g. "HEAL", "SMITH", "DIG").
+        option_index: 0-based rest_site.options[].index, if you have no id.
     """
+    payload: dict = {"action": "choose_rest_option"}
+    if option_id is not None:
+        payload["option_id"] = option_id
+    elif option_index is not None:
+        payload["index"] = option_index
     try:
-        return await _post({"action": "choose_rest_option", "index": option_index})
+        return await _post(payload)
     except Exception as e:
         return _handle_error(e)
 
@@ -587,9 +759,15 @@ async def deck_select_card(card_index: int) -> str:
     """[Card Selection] Select or deselect a card in the card selection screen.
 
     Used when the game asks you to choose cards from your deck (transform, upgrade,
-    remove, discard) or pick a card from offered choices (potions, effects).
+    enchant, remove, discard) or pick a card from offered choices (potions, effects).
 
-    For deck selections: toggles card selection. For choose-a-card: picks immediately.
+    For deck selections: toggles card selection - a card that is already selected comes
+    back out. The result reports `selected` and `selected_count`; game state carries
+    `cards[].selected`, `selected_count` and `required_count`, so there is no need to
+    count your own presses. For choose-a-card: picks immediately.
+
+    Once `max_select` cards are selected the screen opens its preview by itself, and
+    further selecting is refused until you confirm or cancel it.
 
     Args:
         card_index: 0-based index of the card (as shown in game state).
@@ -604,9 +782,12 @@ async def deck_select_card(card_index: int) -> str:
 async def deck_confirm_selection() -> str:
     """[Card Selection] Confirm the current card selection.
 
-    After selecting the required number of cards, use this to confirm.
-    If a preview is showing (e.g., transform preview), this confirms the preview.
-    Not needed for choose-a-card screens where picking is immediate.
+    These screens have two steps. With a preview showing, this applies the selection.
+    Without one, it presses the screen's own confirm, which usually just opens the
+    preview - so a screen may need two calls; the message says which step happened.
+
+    Errors instead of silently doing nothing when the count does not match the screen's
+    min/max. Not needed for choose-a-card screens where picking is immediate.
     """
     try:
         return await _post({"action": "confirm_selection"})
@@ -618,7 +799,8 @@ async def deck_confirm_selection() -> str:
 async def deck_cancel_selection() -> str:
     """[Card Selection] Cancel the current card selection.
 
-    If a preview is showing, goes back to the selection grid.
+    If a preview is showing, goes back to the selection grid AND clears the selection -
+    this is the way out of a preview that was opened with the wrong cards.
     For choose-a-card screens, clicks the skip button (if available).
     Otherwise, closes the card selection screen (only if cancellation is allowed).
     """

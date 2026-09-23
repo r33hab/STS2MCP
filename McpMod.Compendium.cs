@@ -19,17 +19,21 @@ public static partial class McpMod
     private static Type? _runHistoryMembersType;
     private static MemberInfo[]? _runHistoryMembers;
 
-    private static void HandleGetCompendium(HttpListenerResponse response)
+    private static void HandleGetCompendium(HttpListenerRequest request, HttpListenerResponse response)
     {
+        bool pretty = WantsPretty(request);
         try
         {
-            var snapshotTask = RunOnMainThread(BuildCompendiumSnapshot);
-            var snapshot = snapshotTask.GetAwaiter().GetResult();
-            SendJson(response, BuildCompendiumResponse(snapshot));
+            var snapshot = RunOnMainThreadBlocking(BuildCompendiumSnapshot);
+            SendJson(response, BuildCompendiumResponse(snapshot), pretty);
+        }
+        catch (MainThreadUnavailableException ex)
+        {
+            SendUnavailable(response, ex.Message, pretty);
         }
         catch (Exception ex)
         {
-            SendError(response, 500, $"Failed to build compendium: {ex.Message}");
+            SendError(response, 500, $"Failed to build compendium: {ex.Message}", pretty);
         }
     }
 
