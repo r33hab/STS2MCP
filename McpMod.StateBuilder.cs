@@ -457,6 +457,7 @@ public static partial class McpMod
         // overlay stack while the map opens after the player clicks proceed.
         var topOverlay = NOverlayStack.Instance?.Peek();
         var currentRoom = runState.CurrentRoom;
+        var liveCombatRoom = LiveCombatRoom(currentRoom);
         bool mapIsOpen = IsMapScreenOpenOrVisible();
         // The settings screen is pushed on the run's submenu stack, over everything below.
         // It is checked first so the room underneath is not reported as the live screen.
@@ -478,11 +479,13 @@ public static partial class McpMod
         {
             result["state_type"] = "card_select";
             result["card_select"] = BuildCardSelectState(cardSelectScreen, runState);
+            AddSelectionCombatState(result, runState, liveCombatRoom, includeHiddenState);
         }
         else if (topOverlay is NChooseACardSelectionScreen chooseCardScreen)
         {
             result["state_type"] = "card_select";
             result["card_select"] = BuildChooseCardState(chooseCardScreen, runState);
+            AddSelectionCombatState(result, runState, liveCombatRoom, includeHiddenState);
         }
         else if (topOverlay is NChooseABundleSelectionScreen bundleScreen)
         {
@@ -554,7 +557,7 @@ public static partial class McpMod
                 {
                     result["state_type"] = "hand_select";
                     result["hand_select"] = BuildHandSelectState(playerHand, runState);
-                    result["battle"] = BuildBattleState(runState, combatRoom, includeHiddenState);
+                    AddSelectionCombatState(result, runState, combatRoom, includeHiddenState);
                 }
                 else
                 {
@@ -1588,6 +1591,27 @@ public static partial class McpMod
         result["options"] = options;
         result["message"] = "Multiplayer load lobby. Confirm to ready up; once everyone is connected and ready, the run resumes.";
     }
+
+    /// <summary>
+    /// `in_combat` on a selection screen (hand_select, a card_select grid, choose-a-card), and in a fight the
+    /// `battle` block the combat screen itself would carry, built with the same hidden-state gate. A card, potion,
+    /// relic or power opens these mid-fight, and the decision is part of the fight: without the battle the screen
+    /// could not be told apart from the same screen outside combat, let alone analyzed. `state_type` stays the
+    /// screen's, so existing clients are unaffected; the `player` block every in-run payload carries already has
+    /// the fight's hand, piles and energy while CombatManager.IsInProgress.
+    /// </summary>
+    /// <param name="combatRoom">The fight's room (LiveCombatRoom): null when no fight is on (in_combat false, no battle).</param>
+    private static void AddSelectionCombatState(
+        Dictionary<string, object?> result, RunState runState, CombatRoom? combatRoom, bool includeHiddenState)
+    {
+        result["in_combat"] = combatRoom != null;
+        if (combatRoom != null)
+            result["battle"] = BuildBattleState(runState, combatRoom, includeHiddenState);
+    }
+
+    /// <summary>The room, when it is a combat room whose combat has not ended (CombatManager.IsInProgress); else null.</summary>
+    private static CombatRoom? LiveCombatRoom(AbstractRoom? room)
+        => room is CombatRoom combatRoom && CombatManager.Instance.IsInProgress ? combatRoom : null;
 
     /// <param name="includeHiddenState">
     /// Add the enemies' (and allies') move_follow_up_id. See WantsHiddenState.

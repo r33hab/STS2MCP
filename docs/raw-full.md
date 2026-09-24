@@ -711,6 +711,8 @@ left to reattach to, the fight is over rather than about to restart.
 ### `hand_select` — In-Combat Card Selection
 
 Appears when a card effect prompts "Select a card to exhaust/discard/upgrade". **Not** an overlay — happens within the combat hand.
+It always happens in a fight, so it always carries `in_combat: true` and the fight's `battle` block (see
+[In-combat selection screens](#in-combat-selection-screens)).
 
 ```jsonc
 {
@@ -736,9 +738,10 @@ Appears when a card effect prompts "Select a card to exhaust/discard/upgrade". *
     ],
     "can_confirm": false
   },
-  "battle": { ... },  // Full battle state included for context
+  "in_combat": true,  // Always true here
+  "battle": { ... },  // The fight's battle block, as the combat state carries it
   "run": { ... },
-  "player": { ... }
+  "player": { ... }   // Includes hand, energy and piles, as in combat
 }
 ```
 
@@ -1066,7 +1069,11 @@ Chest is auto-opened on first state query.
 
 ### `card_select` — Card Selection Overlay
 
-Covers deck transforms, upgrades, enchants, removals, and choose-a-card effects. Appears on top of any room.
+Covers deck transforms, upgrades, enchants, removals, and choose-a-card effects. Appears on top of any room, and
+mid-fight when a card, potion, relic or power asks you to pick from a pile (Headbutt, Seeker Strike, Secret
+Technique, Liquid Memories) or from freshly made cards (Attack / Skill / Power / Colorless Potion, Discovery,
+Toolbox). A fight's `card_select` carries `in_combat: true` and the `battle` block; see
+[In-combat selection screens](#in-combat-selection-screens).
 
 ```jsonc
 {
@@ -1103,6 +1110,7 @@ Covers deck transforms, upgrades, enchants, removals, and choose-a-card effects.
     // For "choose" type: picking is immediate (no confirm needed).
     // can_skip indicates if a skip button exists.
   },
+  "in_combat": false,  // true when a fight opened it; then "battle" follows, as in combat
   "run": { ... },
   "player": { ... }
 }
@@ -1112,6 +1120,23 @@ Covers deck transforms, upgrades, enchants, removals, and choose-a-card effects.
 `max_select` is reached, or when `confirm_selection` presses the screen's own confirm — and only the
 preview's own confirm applies the selection. `selected` comes from the screen's selection set, not from the
 grid highlight, so it stays `true` during the preview (the game drops the highlight there but keeps the card).
+
+### In-combat selection screens
+
+`hand_select`, a `card_select` grid and a choose-a-card `card_select` can open in the middle of a fight. There they
+carry the fight with them, so a client can tell the decision is part of the combat and analyze it:
+
+| Field | In a fight | Outside a fight |
+|---|---|---|
+| `in_combat` | `true` | `false` |
+| `battle` | The same block the `monster` / `elite` / `boss` state carries (enemies, intents, history...), built under the same [hidden-information](#hidden-information) rules: `move_follow_up_id` only on a `?hidden=1` read with `allow_hidden_state` on | absent |
+| `player` | As in combat: `energy`, `hand`, the piles (`draw_pile` sorted as the game shows it), orbs | as on any other screen |
+
+"In a fight" means the current room is a combat room and its combat has not ended (the game's
+`CombatManager.IsInProgress`). `hand_select` only exists in a fight, so it is always `in_combat: true`. `state_type`
+stays `hand_select` / `card_select`, so a client that only reads the screen block is unaffected. In a fight they
+carry no map block (outside one, `card_select` does, like the other decision screens). Markdown renders the battle
+above the selection, as it always has for `hand_select`.
 
 ### `bundle_select` — Card Bundle Selection Overlay
 
