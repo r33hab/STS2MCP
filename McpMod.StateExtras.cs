@@ -19,10 +19,11 @@ namespace STS2_MCP;
 /// and numeric intent damage; per-relic status and counters; and the turn's and combat's
 /// card-play counts. StateBuilder calls in here; the shapes are documented in docs/raw-full.md.
 ///
-/// Everything reported is something the player can see or derive from what they have seen.
-/// The monster AI's randomness is never read: no RunRng.MonsterAi, no seeds or RNG counters,
-/// and of the move graph only the moves already rolled (state_log, move_id) and the edge out
-/// of the current move (move_follow_up_id, which names a branch state without resolving it).
+/// Everything reported by default is something the player can see or derive from what they have
+/// seen. The monster AI's randomness is never read: no RunRng.MonsterAi, no seeds or RNG counters,
+/// and of the move graph only the moves already rolled (state_log, move_id) and, for an opted-in
+/// hidden read only, the edge out of the current move (move_follow_up_id, which names a branch state
+/// without resolving it).
 ///
 /// Every read is guarded on its own and lands in `warnings` when it fails, so a game update
 /// that renames one member costs that one field, never the payload.
@@ -189,7 +190,12 @@ public static partial class McpMod
     /// `move_id`, `move_follow_up_id`, `is_stunned`, `state_log`, `slot` and `ai_fields`: what a
     /// simulator needs to carry this creature's AI on from the current position.
     /// </summary>
-    private static void AddEnemyAiState(Dictionary<string, object?> state, Creature creature)
+    /// <param name="includeHiddenState">
+    /// Add move_follow_up_id. When the follow-up is a move rather than a branch state, it is the move
+    /// the enemy performs after the one its intents show, which the game never shows; so it is hidden
+    /// information, like the true draw order. See WantsHiddenState.
+    /// </param>
+    private static void AddEnemyAiState(Dictionary<string, object?> state, Creature creature, bool includeHiddenState = false)
     {
         var monster = creature.Monster;
 
@@ -206,7 +212,8 @@ public static partial class McpMod
         }
         catch (Exception ex) { Warn("enemy.move_id", ex); }
         state["move_id"] = moveId;
-        state["move_follow_up_id"] = followUpId;
+        if (includeHiddenState)
+            state["move_follow_up_id"] = followUpId;
 
         bool? stunned = null;
         try { stunned = creature.IsStunned; }
@@ -317,7 +324,8 @@ public static partial class McpMod
     /// or DeathBlow). `damage` is AttackIntent.GetSingleDamage, the per-hit number the intent
     /// shows the player: the move's damage run through Hook.ModifyDamage against the local
     /// player (Strength, Weak, Vulnerable and the rest). `base_damage` is the move's own per-hit
-    /// damage before any of that, AttackIntent.DamageCalc. `hits` is AttackIntent.Repeats.
+    /// damage before any of that, AttackIntent.DamageCalc, floored at 0 the way GetSingleDamage floors
+    /// `damage`. `hits` is AttackIntent.Repeats.
     /// </summary>
     private static void AddAttackIntentDamage(Dictionary<string, object?> intentData, AttackIntent intent, Creature owner)
     {
@@ -332,7 +340,7 @@ public static partial class McpMod
         {
             var damageCalc = intent.DamageCalc;
             if (damageCalc != null)
-                baseDamage = (int)damageCalc();
+                baseDamage = Math.Max(0, (int)damageCalc());
         }
         catch (Exception ex) { Warn("enemy.intent.base_damage", ex); }
         try { hits = intent.Repeats; }

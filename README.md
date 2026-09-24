@@ -32,13 +32,15 @@ several of them exist because `v0.107` removed or moved what upstream relied on.
 All additions are on the HTTP API (`POST /api/v1/singleplayer` with an `action` field, or the state
 returned by `GET /api/v1/singleplayer`). **They are not exposed through the bundled MCP server.**
 [docs/raw-full.md](docs/raw-full.md) documents the fork's state fields (the ordered piles, the run deck,
-the simulator fields of schema 4) and its access control (token, hidden state, debug gate); the actions
-below are documented in this section and in [FORK_NOTES.md](FORK_NOTES.md).
+the simulator fields of schema 4), the player action log (`GET /api/v1/actions`, each move tagged human or
+API), the `set_time_scale` action and its access control (token, hidden state, debug gate); the other
+actions below are documented in this section and in [FORK_NOTES.md](FORK_NOTES.md).
 
 > [!important]
 > The `debug_*` actions below answer `403 debug actions disabled` unless `STS2_MCP.conf` sets
-> `"allow_debug_actions": true`, and `draw_pile_ordered` needs `"allow_hidden_state": true` plus `?hidden=1`.
-> Every request needs the API token. See [API token and access control](#api-token-and-access-control).
+> `"allow_debug_actions": true`, and `draw_pile_ordered` and the enemies' `move_follow_up_id` need
+> `"allow_hidden_state": true` plus `?hidden=1`. Every request needs the API token. See
+> [API token and access control](#api-token-and-access-control).
 
 ### Reaching a chosen room on demand — `McpMod.Debug.cs`
 
@@ -202,7 +204,8 @@ running with the mod loaded does not let a website read your game or play it.
 
 - The token lives in `STS2_MCP.conf` next to the DLL. When the file has none, the mod generates a random
   64-hex-character `token` at startup and writes it in (creating the file, with the `port`, if needed), keeping
-  every other key; on macOS and Linux it then makes the file readable by your user only. Send the token on
+  every other key. On macOS and Linux the file is readable by your user only (0600): the mod writes it that way
+  from the start, and narrows an existing file that is looser when it loads it. Send the token on
   every request as `X-STS2-Token: <token>` or `Authorization: Bearer <token>`; without it every endpoint,
   `GET /` included, answers `401 {"status": "error", "error": "Missing or invalid token"}`.
 - The environment variable `STS2_MCP_TOKEN`, set for the game process, overrides the conf's token.
@@ -211,7 +214,8 @@ running with the mod loaded does not let a website read your game or play it.
   `Content-Type: application/json` (`415` otherwise).
 - Two opt-in switches live in the same file, both off unless set to JSON `true`:
   - `allow_hidden_state` lets a `GET` with `?hidden=1` add what the game never shows the player: the true
-    draw order (`player.draw_pile_ordered`) and the run's seed (the compendium's `current_run.seed`).
+    draw order (`player.draw_pile_ordered`), the enemies' follow-up moves (`battle.enemies[].move_follow_up_id`)
+    and the run's seed (the compendium's `current_run.seed`).
   - `allow_debug_actions` enables the `debug_*` actions described under
     [What this fork adds](#what-this-fork-adds); otherwise they answer
     `403 {"status": "error", "error": "debug actions disabled"}`.

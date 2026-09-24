@@ -68,6 +68,22 @@ public static partial class McpMod
         if (covered != null)
             return covered;
 
+        // Everything the dispatch does to the game (RequestEnqueue, PlayerCmd.EndTurn) raises the action
+        // log's events synchronously, on this thread, inside this bracket: they are tagged "api".
+        _apiDepth++;
+        try
+        {
+            return DispatchAction(action, data, runState, player);
+        }
+        finally
+        {
+            _apiDepth--;
+        }
+    }
+
+    private static Dictionary<string, object?> DispatchAction(
+        string action, Dictionary<string, JsonElement> data, RunState runState, Player player)
+    {
         return action switch
         {
             "open_pause_menu" or "pause" => ExecuteOpenPauseMenu(runState),
@@ -194,12 +210,26 @@ public static partial class McpMod
         return string.IsNullOrWhiteSpace(raw) ? null : raw.Trim();
     }
 
+    /// <summary>
+    /// True while the game would hold a play-phase action instead of queueing it. RequestEnqueue parks a
+    /// card play or an in-combat potion (GameActionType.CombatPlayPhaseOnly) until the play phase opens:
+    /// through the enemy turn and the player's turn start, and for a moment after the player's own phase
+    /// already reads Play (IsPlayPhase), because the game opens the play phase only after its turn-start
+    /// checks finish. play_card and use_potion refuse then, so every action the API asks for is queued
+    /// within its own request: the action log tags it "api", and wait=true watches the action it queued.
+    /// </summary>
+    private static bool IsPlayPhaseActionHeld()
+        => RunManager.Instance.ActionQueueSynchronizer?.CombatState
+            == MegaCrit.Sts2.Core.Entities.Multiplayer.ActionSynchronizerCombatState.NotPlayPhase;
+
     private static Dictionary<string, object?> ExecutePlayCard(Player player, Dictionary<string, JsonElement> data)
     {
         if (!CombatManager.Instance.IsInProgress)
             return Error("Not in combat");
         if (!IsPlayPhase(player))
             return Error("Not in play phase - cannot act during enemy turn");
+        if (IsPlayPhaseActionHeld())
+            return Error("The play phase has not opened yet (the game would hold the card until it does) - retry in a moment");
         if (CombatManager.Instance.PlayerActionsDisabled)
             return Error("Player actions are currently disabled");
         if (!player.Creature.IsAlive)
@@ -285,7 +315,17 @@ public static partial class McpMod
         if (hand != null && (hand.InCardPlay || hand.CurrentMode != NPlayerHand.Mode.Play))
             return Error("Cannot end turn while a card is being played or hand is in selection mode");
 
-        PlayerCmd.EndTurn(player, canBackOut: false);
+        // Marks this as the API's own end turn for the action log: CombatManager.PlayerEndedTurn fires
+        // inside this call, and that event alone cannot tell it from the game ending the turn itself.
+        _apiEndingTurn = true;
+        try
+        {
+            PlayerCmd.EndTurn(player, canBackOut: false);
+        }
+        finally
+        {
+            _apiEndingTurn = false;
+        }
 
         return new Dictionary<string, object?>
         {
@@ -361,6 +401,8 @@ public static partial class McpMod
 
         if (inCombat && CombatManager.Instance.PlayerActionsDisabled)
             return Error("Player actions are currently disabled");
+        if (inCombat && IsPlayPhaseActionHeld())
+            return Error("The play phase has not opened yet (the game would hold the potion until it does) - retry in a moment");
 
         // Resolve target
         Creature? target = null;
@@ -1643,6 +1685,48 @@ public static partial class McpMod
         return null;
     }
 
+    internal const double MinTimeScale = 0.5;
+    internal const double MaxTimeScale = 10.0;
+
+    /// <summary>
+    /// Sets how fast the game runs: Godot.Engine.TimeScale, which scales every animation, tween and
+    /// timed wait, so action resolution too. `scale` is clamped to 0.5-10 (1 is normal speed). The
+    /// setting is the engine's own and global, so it needs no run, and it lasts until it is changed again
+    /// or the game restarts. The state reports the current value as `time_scale`.
+    /// </summary>
+    internal static Dictionary<string, object?> ExecuteSetTimeScale(Dictionary<string, JsonElement> data)
+    {
+        if (!data.TryGetValue("scale", out var element))
+            return Error(System.FormattableString.Invariant(
+                $"Missing 'scale': a number from {MinTimeScale} to {MaxTimeScale} (1 is normal speed)"));
+
+        double requested;
+        if (element.ValueKind == JsonValueKind.Number && element.TryGetDouble(out double number))
+            requested = number;
+        else if (element.ValueKind == JsonValueKind.String
+                 && double.TryParse(element.GetString(), System.Globalization.NumberStyles.Float,
+                     System.Globalization.CultureInfo.InvariantCulture, out double parsed))
+            requested = parsed;
+        else
+            return Error("'scale' must be a number");
+        if (!double.IsFinite(requested))
+            return Error("'scale' must be a finite number");
+
+        double applied = System.Math.Clamp(requested, MinTimeScale, MaxTimeScale);
+        Godot.Engine.TimeScale = applied;
+
+        string message = applied == requested
+            ? System.FormattableString.Invariant($"Time scale set to {applied:0.##}x")
+            : System.FormattableString.Invariant(
+                $"Time scale set to {applied:0.##}x ({requested:0.##} is outside {MinTimeScale}-{MaxTimeScale})");
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["message"] = message,
+            ["time_scale"] = applied
+        };
+    }
+
     /// <summary>
     /// Reveals every obtained-but-unrevealed epoch, opening the Timeline if needed.
     ///
@@ -2631,6 +2715,13 @@ public static partial class McpMod
             return Error("Embark button not available — select a character first");
         }
 
+        // cicero 7e4977a: while a pending-unlock animation owns the screen,
+        // NCharacterSelectScreen.PlayUnlockCharacterAnimation Select()s the newly unlocked character
+        // about a second after the screen opens, overwriting any pick made before it finishes. Refuse,
+        // retryably, instead of racing it.
+        if (IsCharacterSelectionBusy())
+            return Error("Character selection is busy (unlock animation in progress); retry in a moment.");
+
         var buttons = FindAll<NCharacterSelectButton>(charSelect);
         foreach (var btn in buttons)
         {
@@ -2640,11 +2731,34 @@ public static partial class McpMod
             {
                 if (btn.IsLocked)
                     return Error($"Character '{option}' is locked");
+                // NCharacterSelectButton.Select() does nothing while the button still thinks it is
+                // selected, and the unlock animation selects without deselecting the other buttons.
+                // Clear the flag first so the whole commit path runs (delegate -> screen.SelectCharacter
+                // -> lobby.SetLocalCharacter, which is what embark reads).
+                btn.Deselect();
                 btn.Select();
                 return new Dictionary<string, object?> { ["status"] = "ok", ["message"] = $"Selected {SafeGetText(() => btn.Character.Title)}. Use 'confirm' to embark." };
             }
         }
         return Error($"Character '{option}' not found. Available: {string.Join(", ", buttons.Where(b => !b.IsLocked).Select(b => b.Character?.Id.Entry))}");
+    }
+
+    /// <summary>
+    /// True while the character-select screen's pending-unlock animation may still select a character on
+    /// its own: Progress.PendingCharacterUnlock names that character until the animation finishes and
+    /// clears it (cicero 7e4977a). False when the progress cannot be read.
+    /// </summary>
+    internal static bool IsCharacterSelectionBusy()
+    {
+        try
+        {
+            var progress = MegaCrit.Sts2.Core.Saves.SaveManager.Instance?.Progress;
+            return progress != null && progress.PendingCharacterUnlock != ModelId.none;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>

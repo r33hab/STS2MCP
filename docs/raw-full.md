@@ -14,8 +14,9 @@ from `STS2_MCP.conf`, and web pages are refused outright — see [Authentication
 - `GET  /api/v1/wiki` — fuzzy-search discovered card/relic wiki entries
 - `GET  /api/v1/profiles` — list profile slots
 - `POST /api/v1/profiles` — switch or delete profile slots
+- `GET  /api/v1/actions?since=<seq>` — the player's moves (card plays, potions, end turns), each tagged human or API; see [Action log](#action-log)
 
-The endpoints are mutually exclusive: calling singleplayer during a multiplayer run (or vice versa) returns HTTP 409.
+The singleplayer and multiplayer endpoints are mutually exclusive: calling singleplayer during a multiplayer run (or vice versa) returns HTTP 409.
 
 ---
 
@@ -57,11 +58,13 @@ restart the game after editing it.
 - The environment variable `STS2_MCP_TOKEN`, when set to a non-blank value, takes precedence over `token`; no
   token is generated or written then.
 - The two gates are on only for a literal JSON `true`. `"true"` or `1` leave them off.
-- When the mod creates the file or writes a generated token into it, it makes the file readable by its owner
-  only (`0600`) on macOS and Linux.
-- A file that is not a valid JSON object is reported in the game log and left untouched. The mod then runs with
-  the default port, both gates off, and a random token it does not publish, so every request is refused until
-  the file is fixed.
+- On macOS and Linux the file is readable by its owner only (`0600`). When the mod creates the file or writes a
+  generated token into it, it writes a new file that is `0600` from the start and moves it into place, so the
+  token is never on disk with wider permissions. When it loads a file that grants more (a hand-made file at
+  `0644`, say), it narrows it to `0600`; a tighter one (`0400`) is left as it is.
+- A file that is not a valid JSON object is reported in the game log and its contents are left untouched (its
+  mode is still narrowed). The mod then runs with the default port, both gates off, and a random token it does
+  not publish, so every request is refused until the file is fixed.
 
 ```jsonc
 {
@@ -89,6 +92,7 @@ A few fields reveal what the game never shows the player. They are left out of e
 | Field | Endpoint | What it reveals |
 |---|---|---|
 | `player.draw_pile_ordered` | `GET /api/v1/singleplayer`, in combat | The draw pile's true order. The game's own draw-pile screen sorts it, exactly as `draw_pile` does. |
+| `battle.enemies[].move_follow_up_id` (and `battle.allies[]`) | `GET /api/v1/singleplayer`, in combat | The state wired after the enemy's next move. When that is a move rather than a branch, it is the move the enemy performs after the one its intents show, which the game never shows. See [Enemy moves and AI](#monster--elite--boss--combat). |
 | `current_run.seed` | `GET /api/v1/compendium` | The seed of the run in progress, which drives every RNG stream of the run. |
 
 They never appear in `POST` responses (including the `state` a `wait: true` action returns), on the multiplayer
@@ -120,9 +124,15 @@ Every response — `menu` and error-ish states included — carries the build st
   "state_type": "...",      // Screen identifier (see sections below)
   "mod_version": "0.4.0",   // Mod version
   "mod_commit": "2de67cd",  // Git commit built from ("<sha>-dirty" from an edited tree); null if unknown
-  "schema_version": 4       // Contract version — see below
+  "schema_version": 4,      // Contract version — see below
+  "action_log_seq": 57,     // seq of the newest action-log entry, 0 before the first — see "Action log"
+  "time_scale": 1           // The game's speed (Godot Engine.TimeScale; 1 = normal) — see set_time_scale
 }
 ```
+
+`action_log_seq` starts at 0 each time the game starts and then only grows. When it moves,
+`GET /api/v1/actions?since=<the seq you last read>` returns the new moves. `time_scale` is `null` (with a
+`warnings` entry) if it could not be read.
 
 `schema_version` is bumped **only** when an existing field or action changes meaning or is removed.
 Purely additive changes (new fields, actions, parameters, `state_type`s) do not bump it, so
@@ -131,11 +141,12 @@ feature-detect additions by presence and use `schema_version` only to notice a b
 - **4** — `player.draw_pile_ordered` is gone from the default payload: the draw pile's true order
   is [hidden information](#hidden-information), sent only to an opted-in `?hidden=1` read, and
   every request needs the API token. The same version adds what a simulator needs to rebuild a
-  combat position — enemy `move_id`, `move_follow_up_id`, `is_stunned`, `state_log`, `slot`,
-  `ai_fields` and attack-intent `damage` / `base_damage` / `hits`; card `enchantment`,
-  `affliction` and `fields`; pile card `id` / `is_upgraded` / `upgrade_level`; `uid` on the
-  ordered piles; relic `status`, `is_used_up`, `stack_count`, `saved` and `fields`; and
-  `battle.history` — so a client that relies on those can require `schema_version >= 4`.
+  combat position — enemy `move_id`, `is_stunned`, `state_log`, `slot`, `ai_fields` and
+  attack-intent `damage` / `base_damage` / `hits` (and, on a hidden read only,
+  `move_follow_up_id`); card `enchantment`, `affliction` and `fields`; pile card `id` /
+  `is_upgraded` / `upgrade_level`; `uid` on the ordered piles; relic `status`, `is_used_up`,
+  `stack_count`, `saved` and `fields`; and `battle.history` — so a client that relies on those
+  can require `schema_version >= 4`.
 - **3** — `map.next_encounters` is gone. It read which monster / elite / event the act would
   serve next out of the pre-rolled room list, which the game does not show until the room is
   entered. `map.encounters_seen` reports what the act has already served instead.
@@ -481,6 +492,8 @@ The same screen drives SP, MP host, and MP client. In MP, an additional `lobby` 
   "menu_screen": "character_select",
   "message": "Select a character.",
   "characters": [ /* same shape as SP */ ],
+  "selected_character": "REGENT",  // The selected character, the one embark starts; absent until one is selected
+  "selection_busy": false,         // true while the unlock animation may still change the selection
   "lobby": {                       // present only in MP
     "type": "host",                // "host" | "client" | "singleplayer"
     "game_mode": "standard",       // "standard" | "daily" | "custom"
@@ -519,6 +532,12 @@ The same screen drives SP, MP host, and MP client. In MP, an additional `lobby` 
 ```
 
 In SP the `lobby` field is omitted, and `unready` does not appear (the unready button is only enabled after MP ready).
+
+`selected_character` and `selection_busy` are reported in SP and MP. When the screen opens right after a character
+was unlocked, the game plays an unlock animation that selects the new character about a second later,
+overwriting any earlier pick. While that animation is pending, `selection_busy` is `true` and `menu_select` with
+a character refuses with a retryable error ("Character selection is busy (unlock animation in progress); retry
+in a moment."). Check that `selected_character` names your pick before you send `confirm`.
 
 ### `unknown`
 
@@ -562,7 +581,7 @@ Run state or room type not recognized.
           }
         ],
         "move_id": "WHIRL_MOVE",       // The move it will perform next (the game's move state id)
-        "move_follow_up_id": "SPIKEN_MOVE", // The state wired after that move: a move id or a branch state's id
+        "move_follow_up_id": "SPIKEN_MOVE", // Hidden read only: the state wired after that move (a move id or a branch state's id)
         "is_stunned": false,
         "state_log": ["SPIKEN_MOVE", "SPIKE_SPIT_MOVE", "WHIRL_MOVE"], // Moves its AI has rolled, oldest first
         "slot": 0,                     // Position among the enemy slots
@@ -590,7 +609,7 @@ Run state or room type not recognized.
         },
         "intents": [],                 // Becomes a Heal intent on the turn before the revive
         "move_id": "DEAD_MOVE",
-        "move_follow_up_id": "REATTACH_MOVE"
+        "move_follow_up_id": "REATTACH_MOVE" // hidden read only
         // ...and is_stunned, state_log, slot, ai_fields as above
       }
     ],
@@ -608,17 +627,20 @@ Run state or room type not recognized.
 }
 ```
 
-**Enemy moves and AI.** These let a simulator carry each enemy's AI on from the current position. They
-report what the player has seen or can work out from it; the AI's randomness (its RNG, seeds and counters)
-is never read, and of the move graph only the moves already rolled and the edge out of the current move
-appear:
+**Enemy moves and AI.** These let a simulator carry each enemy's AI on from the current position. By default
+they report what the player has seen or can work out from it; the AI's randomness (its RNG, seeds and
+counters) is never read, and of the move graph only the moves already rolled appear, plus, on a hidden read
+only, the edge out of the current move:
 
 - `move_id` — the id of the move the enemy will perform next (`MoveState.StateId`, e.g. `"WHIRL_MOVE"`),
   whose intents are `intents`. `"STUNNED"` while stunned; `"UNSET_MOVE"`, the game's placeholder, before
   its first move is rolled.
-- `move_follow_up_id` — the state the game has wired to follow that move: another move's id, or the id of a
-  branch state (a random or conditional choice), which is only resolved when the move after this one is
-  rolled. For `"STUNNED"` it is the move the enemy resumes with. `null` when there is none.
+- `move_follow_up_id` — **[hidden information](#hidden-information)**, present only on a `?hidden=1` read
+  with `allow_hidden_state` on. The state the game has wired to follow that move: another move's id, or the
+  id of a branch state (a random or conditional choice), which is only resolved when the move after this one
+  is rolled. When it is a move, it is the move the enemy performs after the one its intents show, which the
+  game never shows the player. For `"STUNNED"` it is the move the enemy resumes with. `null` when there is
+  none.
 - `is_stunned` — `true` while the enemy's move is the stun (the game's `Creature.IsStunned`).
 - `state_log` — the move ids its AI has rolled this combat, oldest first, repeats included: the game's
   `MonsterMoveStateMachine.StateLog`, which its repeat and cooldown rules read. The current move is
@@ -640,8 +662,8 @@ appear:
 **Attack intents.** An intent that is an attack — `type` `"Attack"`, or `"DeathBlow"` — carries its numbers,
 which `label` only has as text: `damage` is the per-hit damage the intent shows the player (the move's
 damage after the game's damage modifiers against you: the enemy's Strength and Weak, your Vulnerable, and
-so on), `base_damage` the move's own per-hit damage before any of them, and `hits` the number of hits. Other
-intents have none of the three.
+so on), `base_damage` the move's own per-hit damage before any of them, and `hits` the number of hits. Both
+damage numbers are floored at 0, as the game floors the intent's number. Other intents have none of the three.
 
 Each of these fields is `null` when it could not be read; the reason is in `warnings`.
 
@@ -1373,6 +1395,70 @@ Switching is rejected during a run. Deleting the active profile is rejected; swi
 
 ---
 
+## Action log
+
+`GET /api/v1/actions?since=<seq>` returns the player's moves: every card play, potion use and end turn, each
+tagged with who made it. A coach uses it to know exactly which move was made, so it can grade that move.
+
+```jsonc
+{
+  "status": "ok",
+  "latest_seq": 57,                    // seq of the newest entry (0 before the first); = action_log_seq in the state
+  "entries": [                         // every entry with seq > since, oldest first
+    {
+      "seq": 55,
+      "kind": "play_card",             // "play_card" | "use_potion" | "end_turn"
+      "source": "human",               // "human": a click in the game; "api": this mod, for a client's request
+      "utc": "2026-09-24T18:02:11.482Z",
+      "act": 1,                        // run.act, run.floor and battle.round when the move was made
+      "floor": 3,
+      "round": 2,                      // null outside combat
+      "card_id": "STRIKE_IRONCLAD",
+      "card_uid": "STRIKE_IRONCLAD#1", // the card's uid, as in the state's hand; null if it could not be found
+      "target": "NIBBIT_0",            // the target's entity_id; null for an untargeted card
+      "target_combat_id": 12           // the target's combat_id; null for an untargeted card
+    },
+    {
+      "seq": 56, "kind": "use_potion", "source": "api",
+      "utc": "2026-09-24T18:02:13.090Z", "act": 1, "floor": 3, "round": 2,
+      "slot": 0,                       // belt slot, as in player.potions[].slot
+      "target": null,                  // entity_id of a monster target; null for no target or yourself
+      "target_combat_id": 7            // the target's combat_id (your own creature for a potion used on
+                                       // yourself in combat); null for no target
+    },
+    { "seq": 57, "kind": "end_turn", "source": "human", "utc": "2026-09-24T18:02:15.771Z", "act": 1, "floor": 3, "round": 2 }
+  ]
+}
+```
+
+| Parameter | Meaning |
+|---|---|
+| `since` | Return the entries with a `seq` greater than this. Default `0`: every entry still held. It must be a whole number of 0 or more; anything else is HTTP 400. |
+
+- **Fields by kind.** Every entry has `seq`, `kind`, `source`, `utc` (UTC, millisecond precision), `act`, `floor`
+  and `round`. `play_card` adds `card_id`, `card_uid`, `target` and `target_combat_id`; `use_potion` adds `slot`,
+  `target` and `target_combat_id`; `end_turn` adds nothing. A kind's keys are always present; a value that does
+  not apply, or could not be read, is `null`.
+- **Polling.** Keep the highest `seq` you have seen and pass it as `since`. Every state carries
+  `action_log_seq`, the newest seq, so a client that polls the state can tell when there is something new.
+  Seqs are consecutive. They start again at 1 each time the game starts: the log is kept in memory, not saved.
+- **Capacity.** The log keeps the newest 2000 entries. If the first entry you get has a `seq` above `since + 1`,
+  the entries in between were dropped.
+- **What counts as a move.** An entry is written when the game queues the request: when you click (or the API
+  acts), not when the move resolves. The game can still cancel a queued request, for example a card queued behind
+  the play that ends the combat; the log does not revise the entry, and the next state shows what happened. Only
+  the End Turn button and the API's `end_turn` produce `end_turn` entries: a turn the game ends by itself (Void
+  Form, a player dying on their own turn) is not a move. Cards the game plays by itself (auto-plays) are not
+  logged either. Potions are logged in and out of combat; selling a potion to the merchant is a `use_potion`.
+- **Who made it.** `api` means the mod performed the move for a `POST /api/v1/singleplayer` request (`play_card`,
+  `use_potion`, `sell_potion` or `end_turn`); everything else is `human`. To keep that exact, `play_card` and an
+  in-combat `use_potion` refuse while the game would hold the move for the play phase (see [`play_card`](#play_card)).
+- **Singleplayer only**, and only the local player's moves. Nothing is logged during a multiplayer run.
+- Like every endpoint it needs the API token. It is answered from the log itself rather than on the game's main
+  thread, so it never returns 503, even while the game is loading. `?pretty=1` works as elsewhere.
+
+---
+
 ## POST — Perform Actions
 
 All POST requests use a JSON body with an `"action"` field and action-specific parameters.
@@ -1515,6 +1601,31 @@ Select an option from the main menu, a menu submenu, profile select, character s
 
 `game_over` advertises only `main_menu`. `continue` is not actionable on that screen and returns an error.
 If `timeline` is blocked by pending obtained epochs, `menu_select` returns an error with `manual_action_required: true` and `pending_epoch_ids` instead of opening Timeline.
+On `character_select`, a character pick is refused with a retryable error while `selection_busy` is `true` (the unlock
+animation would overwrite it); after a pick, check `selected_character` before sending `confirm`.
+
+### `set_time_scale`
+
+Change how fast the game runs: the engine's time scale (Godot `Engine.TimeScale`), which speeds up or slows down
+every animation and timed wait, and with them how quickly actions resolve. It works with or without a run, and
+while the pause menu is open.
+
+```json
+{ "action": "set_time_scale", "scale": 3 }
+```
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `scale` | number | Yes | `1` is normal speed. Clamped to `0.5`–`10`. A numeric string such as `"3"` is accepted. |
+
+```jsonc
+{ "status": "ok", "message": "Time scale set to 3x", "time_scale": 3 }   // time_scale: the value applied, after clamping
+```
+
+The setting lasts until it is changed again or the game restarts, and every state reports it as `time_scale`.
+`wait` is ignored for this action.
+
+**Errors:** missing, non-numeric or non-finite `scale`.
 
 ---
 
@@ -1531,7 +1642,11 @@ Play a card from hand during combat.
 | `card_index` | int | Yes | 0-based index in hand |
 | `target` | string | For `AnyEnemy` cards | `entity_id` of the target enemy |
 
-**Errors:** Not in combat, not play phase, card unplayable, invalid index, missing target.
+**Errors:** Not in combat, not play phase, card unplayable, invalid index, missing target. Also "The play phase has
+not opened yet" for a moment at the start of each turn: the player's phase already reads Play (`is_play_phase` is
+true) but the game has not yet opened the play phase, and would hold the card until it does. Retry; nothing was
+queued. The mod refuses rather than letting the game hold the card, so the play is queued inside the request and
+the [action log](#action-log) tags it `api`.
 
 **Warning:** Playing a card removes it from hand — all higher indices shift left. Play from highest index first, or re-query state between plays.
 
@@ -1548,7 +1663,10 @@ Use a potion from the potion belt.
 | `slot` | int | Yes | Potion slot index |
 | `target` | string | For `AnyEnemy` potions | `entity_id` of the target enemy |
 
-**Errors:** Empty slot, combat-only potion used outside combat, automatic potion, already queued, player dead.
+**Errors:** Empty slot, combat-only potion used outside combat, automatic potion, already queued, player dead. In
+combat, also "The play phase has not opened yet" (the same retryable refusal as `play_card`): during the turn start
+(the draw), and for a moment after `is_play_phase` turns true, the game would hold the potion until the play phase
+opens.
 
 ### `discard_potion`
 

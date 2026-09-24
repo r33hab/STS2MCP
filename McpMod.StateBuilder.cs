@@ -77,8 +77,19 @@ public static partial class McpMod
             ["state_type"] = stateType,
             ["mod_version"] = Version,
             ["mod_commit"] = BuildCommit,
-            ["schema_version"] = StateSchemaVersion
+            ["schema_version"] = StateSchemaVersion,
+            // The newest action-log entry's seq: when it moves, GET /api/v1/actions?since=<the last seq
+            // read> has the new moves (McpMod.ActionLog.cs).
+            ["action_log_seq"] = ActionLogSeq,
+            ["time_scale"] = ReadTimeScale()
         };
+    }
+
+    /// <summary>Godot.Engine.TimeScale, which set_time_scale changes; null (and a warning) if unreadable.</summary>
+    private static double? ReadTimeScale()
+    {
+        try { return Godot.Engine.TimeScale; }
+        catch (Exception ex) { Warn("time_scale", ex); return null; }
     }
 
     /// <summary>Called through BuildGameState(), which brackets it with the warning collector.</summary>
@@ -543,12 +554,12 @@ public static partial class McpMod
                 {
                     result["state_type"] = "hand_select";
                     result["hand_select"] = BuildHandSelectState(playerHand, runState);
-                    result["battle"] = BuildBattleState(runState, combatRoom);
+                    result["battle"] = BuildBattleState(runState, combatRoom, includeHiddenState);
                 }
                 else
                 {
                     result["state_type"] = combatRoom.RoomType.ToString().ToLower(); // monster, elite, boss
-                    result["battle"] = BuildBattleState(runState, combatRoom);
+                    result["battle"] = BuildBattleState(runState, combatRoom, includeHiddenState);
                 }
             }
             else
@@ -1125,6 +1136,21 @@ public static partial class McpMod
         if (characters.Count > 0)
             result["characters"] = characters;
 
+        // cicero 7e4977a: the character the screen has selected, which is the one embark starts
+        // (screen.SelectCharacter -> lobby.SetLocalCharacter), and whether the pending-unlock animation
+        // may still change it. A client can check its pick took before confirming; menu_select refuses
+        // a pick while selection_busy is true.
+        try
+        {
+            if (GetInstanceFieldValue(charSelect, "_selectedButton") is NCharacterSelectButton selectedButton
+                && selectedButton.Character is { } selectedCharacter)
+            {
+                result["selected_character"] = selectedCharacter.Id.Entry;
+            }
+        }
+        catch (Exception ex) { Warn("menu.character_select.selected_character", ex); }
+        result["selection_busy"] = IsCharacterSelectionBusy();
+
         var embarkBtn = GetInstanceFieldValue(charSelect, "_embarkButton");
         if (embarkBtn is NClickableControl embarkClickable && IsNodeVisible(embarkClickable))
         {
@@ -1553,7 +1579,11 @@ public static partial class McpMod
         result["message"] = "Multiplayer load lobby. Confirm to ready up; once everyone is connected and ready, the run resumes.";
     }
 
-    private static Dictionary<string, object?> BuildBattleState(RunState runState, CombatRoom combatRoom)
+    /// <param name="includeHiddenState">
+    /// Add the enemies' (and allies') move_follow_up_id. See WantsHiddenState.
+    /// </param>
+    private static Dictionary<string, object?> BuildBattleState(
+        RunState runState, CombatRoom combatRoom, bool includeHiddenState = false)
     {
         var combatState = CombatManager.Instance.DebugOnlyGetState();
         var battle = new Dictionary<string, object?>();
@@ -1570,7 +1600,7 @@ public static partial class McpMod
         battle["turn"] = combatState.CurrentSide.ToString().ToLower();
         battle["is_play_phase"] = IsPlayPhase(combatState);
 
-        battle["enemies"] = BuildEnemyList(combatState);
+        battle["enemies"] = BuildEnemyList(combatState, includeHiddenState);
 
         // FORK ADDITION — the player's side of the board. Only `enemies` was reported, so
         // Osty was invisible to anything reading this: a Necrobinder capture could not see
@@ -1586,7 +1616,7 @@ public static partial class McpMod
                 // MERGE: cat 9dce139 replaced the per-build entityCounts dictionary with a
                 // per-combat registry keyed by CombatId, so BuildEnemyState no longer takes
                 // one. Allies now get stable entity_ids from the same registry.
-                allies.Add(BuildEnemyState(creature));
+                allies.Add(BuildEnemyState(creature, includeHiddenState));
             }
         }
 
@@ -2286,7 +2316,8 @@ public static partial class McpMod
     /// unwound from the list (CreatureCmd defers removal while its monster is mid-move) is
     /// left out, because it is leaving.
     /// </summary>
-    private static List<Dictionary<string, object?>> BuildEnemyList(ICombatState combatState)
+    /// <param name="includeHiddenState">Add move_follow_up_id. See WantsHiddenState.</param>
+    private static List<Dictionary<string, object?>> BuildEnemyList(ICombatState combatState, bool includeHiddenState = false)
     {
         var enemies = new List<Dictionary<string, object?>>();
         RefreshEntityIdRegistry(combatState);
@@ -2299,7 +2330,7 @@ public static partial class McpMod
                 continue;
             if (creature.CombatId is uint id && !seenCombatIds.Add(id))
                 continue;
-            enemies.Add(BuildEnemyState(creature));
+            enemies.Add(BuildEnemyState(creature, includeHiddenState));
         }
         return enemies;
     }
@@ -2321,7 +2352,8 @@ public static partial class McpMod
         catch (Exception ex) { Warn("enemy.stays_in_combat_while_dead", ex); return false; }
     }
 
-    private static Dictionary<string, object?> BuildEnemyState(Creature creature)
+    /// <param name="includeHiddenState">Add move_follow_up_id. See WantsHiddenState.</param>
+    private static Dictionary<string, object?> BuildEnemyState(Creature creature, bool includeHiddenState = false)
     {
         var monster = creature.Monster;
         string entityId = GetStableEntityId(creature);
@@ -2382,7 +2414,7 @@ public static partial class McpMod
             state["intents"] = intents;
         }
 
-        AddEnemyAiState(state, creature);
+        AddEnemyAiState(state, creature, includeHiddenState);
 
         return state;
     }

@@ -14,6 +14,7 @@ HTTP API on `localhost:15526`. Every request needs the header `X-STS2-Token: <to
 - `GET /api/v1/wiki` — fuzzy-search discovered card/relic wiki entries
 - `GET /api/v1/profiles` — list profile slots
 - `POST /api/v1/profiles` — switch or delete profile slots
+- `GET /api/v1/actions?since=<seq>` — the player's moves (card plays, potions, end turns), tagged human or API; see "GET — Action log"
 
 Singleplayer and multiplayer endpoints are mutually exclusive (HTTP 409 if mismatched).
 
@@ -23,6 +24,13 @@ Singleplayer and multiplayer endpoints are mutually exclusive (HTTP 409 if misma
 |-----------|-----------------------------------------------|---------|-----------------------------------------------------------------|
 | `format`  | `json`, `markdown`                            | `json`  | Response format                                                 |
 | `pretty`  | `1`, `true`, `yes` (or present with no value) | off     | Indent the JSON. Off by default — compact output is ~32% smaller |
+| `hidden`  | `1`                                           | off     | Add the hidden-information fields (below). Ignored unless `allow_hidden_state` is `true` in `STS2_MCP.conf` |
+
+Hidden information — what the game never shows the player — is left out unless `allow_hidden_state` is on and
+the GET has `?hidden=1`; it is for tests and capture tools, never for a coach or autopilot:
+`player.draw_pile_ordered` (the draw pile's true order), `battle.enemies[].move_follow_up_id` (and allies': the
+state wired after the enemy's next move, i.e. the move after it when that is not a random branch) and, on
+`/api/v1/compendium`, `current_run.seed`. `raw-full.md`, "Hidden information", has the details.
 
 `pretty` applies to POST requests as well (e.g. `POST /api/v1/singleplayer?pretty=1`) and to error
 responses. It has no effect on `format=markdown`.
@@ -33,7 +41,9 @@ Every JSON response includes:
 - `state_type` — which screen the game is on (see below)
 - `mod_version` — mod version string, e.g. `0.4.0`
 - `mod_commit` — git commit the mod was built from, e.g. `2de67cd` (`2de67cd-dirty` for a build from an edited tree), `null` when the build could not determine one
-- `schema_version` — integer version of this contract, currently `4`. **Bumped only when an existing field or action changes meaning or is removed.** Added fields, actions, parameters and `state_type`s do not bump it, so feature-detect additions by presence and use `schema_version` only to notice a breaking change. `2`: `battle.enemies` can contain a dead enemy the game keeps in the fight (`alive: false`), so it is no longer the same thing as "the enemies you can target". `3`: `map.next_encounters` is gone. `4`: `player.draw_pile_ordered` is hidden information (only with `allow_hidden_state` and `?hidden=1`) and every request needs the token; the same version adds the simulator fields below (enemy move ids and AI state, intent damage numbers, card state, relic counters, `battle.history`). `raw-full.md` has the details.
+- `schema_version` — integer version of this contract, currently `4`. **Bumped only when an existing field or action changes meaning or is removed.** Added fields, actions, parameters and `state_type`s do not bump it, so feature-detect additions by presence and use `schema_version` only to notice a breaking change. `2`: `battle.enemies` can contain a dead enemy the game keeps in the fight (`alive: false`), so it is no longer the same thing as "the enemies you can target". `3`: `map.next_encounters` is gone. `4`: `player.draw_pile_ordered` is hidden information (only with `allow_hidden_state` and `?hidden=1`) and every request needs the token; the same version adds the simulator fields below (enemy move ids and AI state, intent damage numbers, card state, relic counters, `battle.history`), of which `move_follow_up_id` is hidden information too. `raw-full.md` has the details.
+- `action_log_seq` — the seq of the newest [action-log](#get--action-log) entry (0 before the first). When it moves, `GET /api/v1/actions?since=<the seq you last read>` has the new moves.
+- `time_scale` — how fast the game runs (Godot `Engine.TimeScale`, `1` = normal); change it with `set_time_scale`. `null` if it could not be read.
 - `warnings` — **present only when something went wrong.** A list of strings, one per part of the state that could not be built, as `"<field or section>: <ExceptionType>: <message>"` (e.g. `"map.encounters_seen: NullReferenceException: ..."`). The state builders read the live game through reflection and swallow whatever throws, so a member the game renamed simply stops appearing; this list says which one. **A warning naming a field means that field may be absent, partial or stale below** — the rest of the payload is still valid. Duplicates are collapsed, and the list stops at 50 entries plus a final `"... N more warnings suppressed"`. Markdown renders the count and the first three under the `STILL RESOLVING` block. Not every swallowed exception is reported: a few catches are expected to fire during normal play (node-tree churn, probing alternative property names) and are deliberately silent.
 - `run` — `{ act, floor, ascension }` (absent for `menu`)
 - `player` — full player state: character, HP, gold, relics, potions, `max_potion_slots` (belt capacity, grows with relics), and during combat: energy, hand, piles, orbs (absent for `menu`)
@@ -41,8 +51,8 @@ Every JSON response includes:
   - `deck_count` — number of cards in the master deck. Present on every screen, combat included (combat clones the deck into the draw pile, so the deck itself stays intact).
   - `deck` — the master deck itself, one entry per card: `index` (position in this list), `id`, `name`, `type`, `cost`, `star_cost`, `description`, `rarity`, `is_upgraded`, `keywords`, `enchantment`, `affliction`, `fields`. Present on every screen, combat included (in a fight it is the run deck, not the combat piles: cards generated during the fight are in `hand` / `draw_pile` / `discard_pile` / `exhaust_pile` but not here). Empty (and `deck_count` 0) before a run's starting deck is dealt out. Markdown renders it (outside combat only) as `### Deck (N cards)` with identical copies collapsed into one `×N` line.
 - `battle` — combat state (`monster` / `elite` / `boss`, and included for context on the overlays a fight can open): `round`, `turn`, `is_play_phase`, `enemies`, `allies`, `history`.
-  - `enemies[]` move and AI state, for rebuilding the fight in a simulator: `move_id` (the move it performs next, e.g. `"WHIRL_MOVE"`; `"STUNNED"` while stunned), `move_follow_up_id` (the move or branch state wired after it), `is_stunned`, `state_log` (moves its AI has rolled, oldest first), `slot` (position among the enemy slots) and `ai_fields` (the monster class's own int/bool/enum/string state by member name, defaults left out). The AI's randomness is never exposed.
-  - `enemies[].intents[]` of type `Attack` / `DeathBlow` also carry `damage` (per hit, as shown to the player), `base_damage` (per hit, before modifiers) and `hits`.
+  - `enemies[]` move and AI state, for rebuilding the fight in a simulator: `move_id` (the move it performs next, e.g. `"WHIRL_MOVE"`; `"STUNNED"` while stunned), `is_stunned`, `state_log` (moves its AI has rolled, oldest first), `slot` (position among the enemy slots) and `ai_fields` (the monster class's own int/bool/enum/string state by member name, defaults left out). `move_follow_up_id` (the move or branch state wired after the next move) is hidden information, sent only on a `?hidden=1` read with `allow_hidden_state` on. The AI's randomness is never exposed.
+  - `enemies[].intents[]` of type `Attack` / `DeathBlow` also carry `damage` (per hit, as shown to the player), `base_damage` (per hit, before modifiers; both floored at 0) and `hits`.
   - `history` — the local player's card plays: `cards_played_this_turn`, `attacks_played_this_turn`, `skills_played_this_turn`, `powers_played_this_turn`, `cards_played_this_combat`.
   - `enemies[].alive` — **on every enemy**. Almost always `true`: a killed enemy leaves the fight and stops being listed. The exception is a corpse the game refuses to remove — a Decimillipede segment held by `REATTACH_POWER` — which stays listed with `alive: false` and `hp: 0`, keeping the `entity_id` it already had. **Filter targets on `alive`, not on `hp > 0`**; `play_card` / `use_potion` already refuse a dead target.
   - `enemies[].revive` — present only when that corpse is scheduled to come back: `{ in_turns, hp, power_id, power_name }`. `in_turns` counts enemy turns until it heals itself back up (2 on the turn it dies, 1 on the turn before it stands up, when its `intents` also show `Heal`); `hp` is what it returns with. Both are `null` when they cannot be read. A corpse kept in the fight by a power that never revives it has `alive: false` and no `revive`. Markdown marks the enemy heading `— DEAD` and prints a `⚠ WAITING TO REVIVE in N enemy turn(s) at H HP` line.
@@ -84,6 +94,27 @@ Anything the pause menu opens on the same stack is reported the same way with a 
 (e.g. `compendium`, `card_library`), `screen_class` naming the game's node type, and a single `back`
 option — so a screen the API can enter is always a screen it can leave. While any of these is open,
 gameplay actions are refused with an error instead of being applied to the room underneath.
+
+## GET — Action log
+
+`GET /api/v1/actions?since=<seq>` returns `{ "status": "ok", "latest_seq": N, "entries": [...] }`: the player's moves
+with a `seq` above `since` (default 0), oldest first. `latest_seq` is the newest seq, the same number as the
+state's `action_log_seq`. A non-numeric or negative `since` is HTTP 400.
+
+| Field | Meaning |
+|---|---|
+| `seq` | Consecutive from 1, restarting when the game restarts (the log is in memory). The log keeps the newest 2000. |
+| `kind` | `play_card`, `use_potion` or `end_turn` |
+| `source` | `human` (a click in the game) or `api` (this mod, for a `POST /api/v1/singleplayer` request) |
+| `utc` | When the game queued the move, e.g. `2026-09-24T18:02:11.482Z` |
+| `act`, `floor`, `round` | `run.act`, `run.floor` and `battle.round` at that moment (`round` is `null` outside combat) |
+| `card_id`, `card_uid`, `target`, `target_combat_id` | `play_card` only: the card (id, and its uid from the state), and its target's `entity_id` and `combat_id` (`null` when untargeted) |
+| `slot`, `target`, `target_combat_id` | `use_potion` only: the belt slot, and the target (`target` is `null` for no target or yourself) |
+
+An entry is the request, logged when the game queues it; the game may still cancel it (a card queued behind the
+play that ends the combat), and the next state shows that. A turn the game ends by itself (Void Form) is not an
+`end_turn` entry, and cards the game plays by itself are not logged. Singleplayer only, local player only. The
+endpoint needs the token, and never returns 503: it does not wait for the game's main thread.
 
 ## POST — Actions
 
@@ -151,7 +182,8 @@ This applies to GET endpoints too; every request is served from the game's main 
 
 | Action | Parameters | When to Use |
 |---|---|---|
-| `menu_select` | `option`: string, `seed`?: string, `ascension`?: int | Choose an advertised menu option. Options are case-insensitive. Submenus include `back` where visible, including `profile_select` options `profile_1`, `profile_2`, `profile_3`, and `back`. Blocking popups expose normalized button labels such as `ignore` or `back`. On `settings` (opened with `settings` from the main menu, or from the pause menu during a run) the only option is `back` (aliases `close`, `resume`), which leaves the screen and returns to whatever was underneath; settings values themselves cannot be changed through the API. On `pause` the options are `resume` (aliases `back`, `close`, `continue`) to close the menu and return to the run, `settings` and `compendium` (both left again with `back`), `give_up` (alias `abandon`) which **abandons the run permanently** — it opens the game's confirmation popup, reported next as `menu_screen: "popup"`, and is never auto-confirmed, so answer it with `yes` / `no` — `save_and_quit` (alias `main_menu`) which saves and returns to the main menu, where `continue` resumes the run, and `disconnect` in multiplayer. On the screens the pause menu opens (`compendium` and below) the only option is `back`. `game_over` supports `main_menu` only; `continue` returns an error. Supplying `seed` in unsupported contexts such as standard singleplayer character select returns an error and does not start a run. Timeline is no longer blocked when epochs are pending; use the `timeline_reveal_epochs` action to clear them. Multiplayer flow: on `multiplayer_join` use `refresh` / `back` / `join_<index>` / `join_<player_id>`. On `multiplayer_load_lobby` use `confirm` (or `embark`) to ready up, `unready` to retract, `back` to leave. On `character_select` while in MP, an additional `unready` option becomes available after readying, plus a `lobby` block in state lists ascension, all_ready, and per-player roster. `ascension` sets the ascension level on character select (applied before `option`, so it can ride along with the character pick or with `confirm`, or be sent alone with an empty `option`); character select state reports the current `ascension`, the unlocked `max_ascension`, and `ascension_selectable`. |
+| `menu_select` | `option`: string, `seed`?: string, `ascension`?: int | Choose an advertised menu option. Options are case-insensitive. Submenus include `back` where visible, including `profile_select` options `profile_1`, `profile_2`, `profile_3`, and `back`. Blocking popups expose normalized button labels such as `ignore` or `back`. On `settings` (opened with `settings` from the main menu, or from the pause menu during a run) the only option is `back` (aliases `close`, `resume`), which leaves the screen and returns to whatever was underneath; settings values themselves cannot be changed through the API. On `pause` the options are `resume` (aliases `back`, `close`, `continue`) to close the menu and return to the run, `settings` and `compendium` (both left again with `back`), `give_up` (alias `abandon`) which **abandons the run permanently** — it opens the game's confirmation popup, reported next as `menu_screen: "popup"`, and is never auto-confirmed, so answer it with `yes` / `no` — `save_and_quit` (alias `main_menu`) which saves and returns to the main menu, where `continue` resumes the run, and `disconnect` in multiplayer. On the screens the pause menu opens (`compendium` and below) the only option is `back`. `game_over` supports `main_menu` only; `continue` returns an error. Supplying `seed` in unsupported contexts such as standard singleplayer character select returns an error and does not start a run. Timeline is no longer blocked when epochs are pending; use the `timeline_reveal_epochs` action to clear them. Multiplayer flow: on `multiplayer_join` use `refresh` / `back` / `join_<index>` / `join_<player_id>`. On `multiplayer_load_lobby` use `confirm` (or `embark`) to ready up, `unready` to retract, `back` to leave. On `character_select` while in MP, an additional `unready` option becomes available after readying, plus a `lobby` block in state lists ascension, all_ready, and per-player roster. `ascension` sets the ascension level on character select (applied before `option`, so it can ride along with the character pick or with `confirm`, or be sent alone with an empty `option`); character select state reports the current `ascension`, the unlocked `max_ascension`, and `ascension_selectable`. Character select state also reports `selected_character` (the character embark will start; absent until one is selected) and `selection_busy`: right after a character unlock the game plays an animation that selects the new character itself, and while it is pending a character pick is refused with a retryable "Character selection is busy" error. Check `selected_character` before sending `confirm`. |
+| `set_time_scale` | `scale`: number | Set how fast the game runs (Godot `Engine.TimeScale`; `1` is normal speed), clamped to `0.5`–`10`. Works with or without a run. The response's `time_scale` is the value applied; every state reports it as `time_scale`. Lasts until changed or the game restarts. |
 | `open_pause_menu` (alias `pause`) | (none) | Open the in-run pause menu (the top-bar gear / Esc), the only API route out of a run. Requires a run in progress; returns `already_open: true` if it was already up, and an error if the compendium or settings is stacked on top of it (leave that with `menu_select` `back` first) or if a card is still being played. The next state reports `menu_screen: "pause"`. ⚠️ From there `give_up` **abandons the run permanently** (it asks for confirmation first) and `save_and_quit` ends the session back at the main menu — neither is undoable from the API. |
 | `timeline_reveal_epochs` | (none) | Reveal every obtained-but-unrevealed epoch. A finished run leaves epochs obtained, and the main menu hides `singleplayer` until they are revealed. Call from the main menu and repeat until the response has `done: true`; `pending_epoch_ids` lists what is left. Opens the Timeline, reveals each pending epoch through the game's own reveal path (granting its unlocks and writing progress), then returns to the main menu. Works with no run in progress. |
 
@@ -210,6 +242,11 @@ Example searches:
 | `sell_potion` | `slot`: int (aliases `potion_index`, `index`) | Sell a potion to the merchant by using it on them (Foul Potion's 100-gold mode). Only valid in a shop or fake merchant, and only for potions with a merchant interaction; shop state lists those under `sellable_potions`. |
 | `discard_potion` | `slot`: int | Discard a potion to free up the slot. Use when slots are full and you need room for incoming potions. |
 | `end_turn` | _(none)_ | End the player's turn. |
+
+`play_card`, and `use_potion` in combat, refuse with a retryable "The play phase has not opened yet" error while
+the game would hold the move until the play phase opens: for a moment after `is_play_phase` turns true, and, for
+a potion, during the turn start too. Nothing is queued; retry. (This keeps every API move inside its own request,
+so the action log tags it `api`.)
 
 ### In-Combat Hand Selection (`hand_select`)
 
