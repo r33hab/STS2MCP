@@ -147,7 +147,10 @@ public static partial class McpMod
             FormatFakeMerchantMarkdown(sb, fmData);
         }
 
-        if (state.TryGetValue("map", out var mapObj) && mapObj is Dictionary<string, object?> mapData)
+        // The map screen only. The other screens outside combat carry the map for a JSON client planning the route;
+        // rendered there, "Choose Next Node" would invite a choose_map_node the screen cannot take, and every event,
+        // shop and rest site would print the whole act graph.
+        if (stateType == "map" && state.TryGetValue("map", out var mapObj) && mapObj is Dictionary<string, object?> mapData)
         {
             FormatMapMarkdown(sb, mapData);
             if (isMultiplayer)

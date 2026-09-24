@@ -667,12 +667,17 @@ public static partial class McpMod
             result["room_type"] = currentRoom?.GetType().Name;
         }
 
+        // The map on the decision screens outside combat too, as the player can open it there.
+        if (ShouldCarryMap(result.GetValueOrDefault("state_type") as string))
+            result["map"] = BuildMapState(runState, onMapScreen: false);
+
         // Common run info
         result["run"] = new Dictionary<string, object?>
         {
             ["act"] = runState.CurrentActIndex + 1,
             ["floor"] = runState.TotalFloor,
-            ["ascension"] = runState.AscensionLevel
+            ["ascension"] = runState.AscensionLevel,
+            ["map_coord"] = BuildMapCoord(runState)
         };
 
         // Always include full player data (relics, potions, deck, etc.) on every screen
@@ -2873,7 +2878,14 @@ public static partial class McpMod
         return state;
     }
 
-    private static Dictionary<string, object?> BuildMapState(RunState runState)
+    /// <summary>
+    /// The map block. Everything but next_options is read from the run itself. When the payload is the map screen
+    /// (<paramref name="onMapScreen"/>, the default), next_options is read from the screen's own nodes, since those
+    /// are what choose_map_node presses. On any other screen those nodes still hold the travelability of the last
+    /// time the map was open (the alternatives to the node just entered), so next_options is computed from the run
+    /// instead: what the map will offer next (NextTravelablePoints).
+    /// </summary>
+    private static Dictionary<string, object?> BuildMapState(RunState runState, bool onMapScreen = true)
     {
         var state = new Dictionary<string, object?>();
 
@@ -2916,43 +2928,44 @@ public static partial class McpMod
         }
         state["visited"] = visited;
 
-        // Next options - read travelable state from UI nodes
+        // Next options: the screen's travelable nodes, or off the screen what it will offer
         var nextOptions = new List<Dictionary<string, object?>>();
-        var mapScreen = NMapScreen.Instance;
-        if (mapScreen != null)
+        List<MapPoint> travelable;
+        if (onMapScreen)
         {
-            var travelable = FindAll<NMapPoint>(mapScreen)
-                .Where(mp => mp.State == MapPointState.Travelable && mp.Point != null)
-                .OrderBy(mp => mp.Point!.coord.col)
-                .ToList();
+            travelable = TravelablePointsOnScreen();
+        }
+        else
+        {
+            try { travelable = NextTravelablePoints(runState); }
+            catch (Exception ex) { Warn("map.next_options", ex); travelable = new List<MapPoint>(); }
+        }
 
-            int index = 0;
-            foreach (var nmp in travelable)
+        int index = 0;
+        foreach (var pt in travelable)
+        {
+            var option = new Dictionary<string, object?>
             {
-                var pt = nmp.Point;
-                var option = new Dictionary<string, object?>
+                ["index"] = index,
+                ["col"] = pt.coord.col,
+                ["row"] = pt.coord.row,
+                ["type"] = pt.PointType.ToString()
+            };
+            AddMapNodeMarks(option, pt, marks);
+
+            // 1-level lookahead
+            var children = pt.Children
+                .OrderBy(c => c.coord.col)
+                .Select(c => new Dictionary<string, object?>
                 {
-                    ["index"] = index,
-                    ["col"] = pt.coord.col,
-                    ["row"] = pt.coord.row,
-                    ["type"] = pt.PointType.ToString()
-                };
-                AddMapNodeMarks(option, pt, marks);
+                    ["col"] = c.coord.col, ["row"] = c.coord.row,
+                    ["type"] = c.PointType.ToString()
+                }).ToList();
+            if (children.Count > 0)
+                option["leads_to"] = children;
 
-                // 1-level lookahead
-                var children = pt.Children
-                    .OrderBy(c => c.coord.col)
-                    .Select(c => new Dictionary<string, object?>
-                    {
-                        ["col"] = c.coord.col, ["row"] = c.coord.row,
-                        ["type"] = c.PointType.ToString()
-                    }).ToList();
-                if (children.Count > 0)
-                    option["leads_to"] = children;
-
-                nextOptions.Add(option);
-                index++;
-            }
+            nextOptions.Add(option);
+            index++;
         }
         state["next_options"] = nextOptions;
 
@@ -3004,6 +3017,87 @@ public static partial class McpMod
 
         return state;
     }
+
+    /// <summary>The map screen's travelable nodes, left to right: what choose_map_node can press. Empty with no screen.</summary>
+    private static List<MapPoint> TravelablePointsOnScreen()
+    {
+        var mapScreen = NMapScreen.Instance;
+        if (mapScreen == null)
+            return new List<MapPoint>();
+
+        return FindAll<NMapPoint>(mapScreen)
+            .Where(mp => mp.State == MapPointState.Travelable && mp.Point != null)
+            .OrderBy(mp => mp.Point!.coord.col)
+            .Select(mp => mp.Point!)
+            .ToList();
+    }
+
+    /// <summary>
+    /// What the map screen will offer next, from the run alone. This is the rule NMapScreen.RecalculateTravelability
+    /// applies each time the screen opens: before the act's first node, the starting node; at the first of two
+    /// bosses, the second; on the last row, the boss; otherwise the current node's children, or every node of the
+    /// next row under free travel (MapTravel.GetTravelablePointsFrom: Winged Boots, the Flight modifier). Left to
+    /// right like the screen's own list, so an index here is the one choose_map_node takes once the map is open.
+    /// </summary>
+    private static List<MapPoint> NextTravelablePoints(RunState runState)
+    {
+        var map = runState.Map;
+        var visited = runState.VisitedMapCoords;
+        IEnumerable<MapPoint> points;
+        if (visited.Count == 0)
+        {
+            points = new[] { map.StartingMapPoint };
+        }
+        else
+        {
+            var current = visited[visited.Count - 1];
+            if (map.SecondBossMapPoint != null && current == map.BossMapPoint.coord)
+                points = new[] { map.SecondBossMapPoint };
+            else if (current.row == map.GetRowCount() - 1)
+                points = new[] { map.BossMapPoint };
+            else if (map.GetPoint(current) is { } point)
+                points = MapTravel.GetTravelablePointsFrom(runState, point);
+            else
+                points = new[] { map.StartingMapPoint };   // the screen's own fallback for a coord it cannot find
+        }
+
+        return points.OrderBy(p => p.coord.col).ToList();
+    }
+
+    /// <summary>
+    /// run.map_coord: the player's current map node, the last one entered this act (RunState.CurrentMapCoord), as
+    /// {col, row} in map.nodes' coordinates; null before the act's first node.
+    /// </summary>
+    private static Dictionary<string, object?>? BuildMapCoord(RunState runState)
+    {
+        try
+        {
+            return runState.CurrentMapCoord is { } coord
+                ? new Dictionary<string, object?> { ["col"] = coord.col, ["row"] = coord.row }
+                : null;
+        }
+        catch (Exception ex)
+        {
+            Warn("run.map_coord", ex);
+            return null;
+        }
+    }
+
+    /// <summary>The screens that carry the map block besides the map screen itself (see ShouldCarryMap).</summary>
+    private static readonly HashSet<string> _mapBearingStates = new(StringComparer.Ordinal)
+    {
+        "rewards", "card_reward", "event", "fake_merchant", "rest_site", "shop", "treasure",
+        "card_select", "bundle_select", "relic_select", "crystal_sphere"
+    };
+
+    /// <summary>
+    /// Whether a payload of this state_type carries the map too: the decision screens outside combat. The map is on
+    /// screen whenever the player opens it (the top bar's map button), so this reveals nothing, and a coach can
+    /// score a Neow pick or a post-room choice against the route ahead. Never in combat, where a card can open a
+    /// card_select mid-fight, and not for the map screen, which builds its own.
+    /// </summary>
+    private static bool ShouldCarryMap(string? stateType)
+        => stateType != null && _mapBearingStates.Contains(stateType) && !CombatManager.Instance.IsInProgress;
 
     /// <summary>
     /// What this act has already served. The game keeps its own record of every map point

@@ -165,12 +165,25 @@ state-specific data:
   "run": {
     "act": 1,               // Current act (1-indexed)
     "floor": 3,             // Total floors visited
-    "ascension": 0          // Ascension level
+    "ascension": 0,         // Ascension level
+    "map_coord": { "col": 3, "row": 2 }  // The map node you are on; null before the act's first node
   },
   "player": { ... },        // Full player state (see Player Object below)
   // ... state-specific fields
 }
 ```
+
+`run.map_coord` is the node the player last entered this act, in the coordinates of `map.nodes[].col/row` (the
+game's `RunState.CurrentMapCoord`). It is `null` before the act's first node: on the map at the start of acts 2
+and 3, until the starting node is chosen. At Neow it is already the starting node (row 0). It is on every payload
+that has a `run` block, combat included.
+
+**The map outside combat.** The decision screens outside combat — `rewards`, `card_reward`, `event` (Neow and
+the other Ancients included), `fake_merchant`, `rest_site`, `shop`, `treasure`, `card_select`, `bundle_select`,
+`relic_select` and `crystal_sphere` — also carry the [`map`](#map--map-navigation) block, in the same shape as
+on the map screen, so a client can weigh a choice against the route ahead. The player can open the map at any
+moment with the map button, so nothing hidden is added. It is left out in combat (including a `card_select` a card
+opens mid-fight) and on the other screens. Markdown output is unchanged: it renders the map on the map screen only.
 
 ### Player Object
 
@@ -798,7 +811,7 @@ Pick one card to add to your deck. Appears after claiming a card reward, or dire
       "col": 3, "row": 2, "type": "Monster"
     },
     "visited": [
-      { "col": 3, "row": 0, "type": "Start" },
+      { "col": 3, "row": 0, "type": "Ancient" },
       { "col": 3, "row": 1, "type": "Monster" },
       { "col": 3, "row": 2, "type": "Monster" }
     ],
@@ -816,7 +829,7 @@ Pick one card to add to your deck. Appears after claiming a card reward, or dire
     "nodes": [                   // Full map DAG
       {
         "col": 3, "row": 0,
-        "type": "Start",
+        "type": "Ancient",     // the starting node, the act's Ancient (Monster in an act 1 begun without Neow)
         "children": [ [2, 1], [3, 1], [4, 1] ]  // [col, row] pairs
       }
     ],
@@ -849,6 +862,14 @@ Pick one card to add to your deck. Appears after claiming a card reward, or dire
   "player": { ... }
 }
 ```
+
+The same block rides along on the decision screens outside combat (see [Common Top-Level Fields](#common-top-level-fields)).
+There, `next_options` lists what the map screen will offer once this room is done, computed from the run the way
+the game's map screen computes it when it opens: the current node's children (every node of the next row with free
+travel, as Winged Boots give), the boss after the last row, the starting node before the act's first node. It is
+ordered the same way, so an `index` there is the index `choose_map_node` takes once the map is open, but
+`choose_map_node` itself only works on the map screen. On the map screen, `next_options` is read from the screen's
+own nodes, as before.
 
 ### `event` — Event / Ancient Encounter
 
