@@ -538,7 +538,9 @@ In SP the `lobby` field is omitted, and `unready` does not appear (the unready b
 was unlocked, the game plays an unlock animation that selects the new character about a second later,
 overwriting any earlier pick. While that animation is pending, `selection_busy` is `true` and `menu_select` with
 a character refuses with a retryable error ("Character selection is busy (unlock animation in progress); retry
-in a moment."). Check that `selected_character` names your pick before you send `confirm`.
+in a moment."). Check that `selected_character` names your pick before you send `confirm`. If the game's
+progress cannot be read, `selection_busy` is `false` and `warnings` has a `menu.character_select.selection_busy`
+entry; a pick is then not refused.
 
 ### `unknown`
 
@@ -1507,7 +1509,9 @@ only if `status` is `"error"`. Branching on `status` alone is enough; the HTTP c
 ```
 
 Every request — GET included — is executed on the game's main thread, which is pumped once per
-rendered frame. A `503` with `"retry": true` means the request **was not executed**: the main thread
+rendered frame. The exceptions are `GET /` (the health check) and `GET /api/v1/actions` (the
+[action log](#action-log)): they are answered without the main thread and never return 503.
+A `503` with `"retry": true` means the request **was not executed**: the main thread
 did not answer within 10 s, or more than 32 requests are already queued, which only happens when the
 game is not processing frames (scene load, hang, minimized or paused app). Nothing was applied to the
 run, so the same request may be sent again once the game is responsive. Contrast with `500`, where
@@ -1666,7 +1670,8 @@ Play a card from hand during combat.
 not opened yet" for a moment at the start of each turn: the player's phase already reads Play (`is_play_phase` is
 true) but the game has not yet opened the play phase, and would hold the card until it does. Retry; nothing was
 queued. The mod refuses rather than letting the game hold the card, so the play is queued inside the request and
-the [action log](#action-log) tags it `api`.
+the [action log](#action-log) tags it `api`. Singleplayer only: `POST /api/v1/multiplayer` does not refuse, and the
+game holds the card until the play phase opens, as it always has.
 
 **Warning:** Playing a card removes it from hand — all higher indices shift left. Play from highest index first, or re-query state between plays.
 
@@ -1684,9 +1689,9 @@ Use a potion from the potion belt.
 | `target` | string | For `AnyEnemy` potions | `entity_id` of the target enemy |
 
 **Errors:** Empty slot, combat-only potion used outside combat, automatic potion, already queued, player dead. In
-combat, also "The play phase has not opened yet" (the same retryable refusal as `play_card`): during the turn start
-(the draw), and for a moment after `is_play_phase` turns true, the game would hold the potion until the play phase
-opens.
+combat, also "The play phase has not opened yet" (the same retryable refusal as `play_card`, singleplayer only):
+during the turn start (the draw), and for a moment after `is_play_phase` turns true, the game would hold the
+potion until the play phase opens.
 
 ### `discard_potion`
 

@@ -199,8 +199,10 @@ public static partial class McpMod
     /// card play or an in-combat potion (GameActionType.CombatPlayPhaseOnly) until the play phase opens:
     /// through the enemy turn and the player's turn start, and for a moment after the player's own phase
     /// already reads Play (IsPlayPhase), because the game opens the play phase only after its turn-start
-    /// checks finish. play_card and use_potion refuse then, so every action the API asks for is queued
-    /// within its own request: the action log tags it "api", and wait=true watches the action it queued.
+    /// checks finish. play_card and use_potion refuse then in singleplayer, so every action the API asks for
+    /// is queued within its own request: the action log tags it "api", and wait=true watches the action it
+    /// queued. In a multiplayer run they do not refuse: nothing is logged there, and the game's own hold-and-
+    /// release is left as it was.
     /// </summary>
     private static bool IsPlayPhaseActionHeld()
         => RunManager.Instance.ActionQueueSynchronizer?.CombatState
@@ -212,7 +214,9 @@ public static partial class McpMod
             return Error("Not in combat");
         if (!IsPlayPhase(player))
             return Error("Not in play phase - cannot act during enemy turn");
-        if (IsPlayPhaseActionHeld())
+        // Singleplayer only: this executor is shared with /api/v1/multiplayer, which keeps the game's own
+        // hold-and-release (the refusal exists for the action log, which multiplayer does not keep).
+        if (!IsMultiplayerRun() && IsPlayPhaseActionHeld())
             return Error("The play phase has not opened yet (the game would hold the card until it does) - retry in a moment");
         if (CombatManager.Instance.PlayerActionsDisabled)
             return Error("Player actions are currently disabled");
@@ -397,7 +401,8 @@ public static partial class McpMod
 
         if (inCombat && CombatManager.Instance.PlayerActionsDisabled)
             return Error("Player actions are currently disabled");
-        if (inCombat && IsPlayPhaseActionHeld())
+        // Singleplayer only, as in ExecutePlayCard: multiplayer keeps the game's hold-and-release.
+        if (inCombat && !IsMultiplayerRun() && IsPlayPhaseActionHeld())
             return Error("The play phase has not opened yet (the game would hold the potion until it does) - retry in a moment");
 
         // Resolve target
@@ -2758,19 +2763,26 @@ public static partial class McpMod
     /// <summary>
     /// True while the character-select screen's pending-unlock animation may still select a character on
     /// its own: Progress.PendingCharacterUnlock names that character until the animation finishes and
-    /// clears it (cicero 7e4977a). False when the progress cannot be read.
+    /// clears it (cicero 7e4977a). False when the progress cannot be read. The state builder reads
+    /// ReadCharacterSelectionBusy instead, so a failure there becomes a warning.
     /// </summary>
     internal static bool IsCharacterSelectionBusy()
     {
         try
         {
-            var progress = MegaCrit.Sts2.Core.Saves.SaveManager.Instance?.Progress;
-            return progress != null && progress.PendingCharacterUnlock != ModelId.none;
+            return ReadCharacterSelectionBusy();
         }
         catch
         {
             return false;
         }
+    }
+
+    /// <summary>IsCharacterSelectionBusy without the catch: throws when the progress cannot be read.</summary>
+    private static bool ReadCharacterSelectionBusy()
+    {
+        var progress = MegaCrit.Sts2.Core.Saves.SaveManager.Instance?.Progress;
+        return progress != null && progress.PendingCharacterUnlock != ModelId.none;
     }
 
     /// <summary>

@@ -1149,7 +1149,12 @@ public static partial class McpMod
             }
         }
         catch (Exception ex) { Warn("menu.character_select.selected_character", ex); }
-        result["selection_busy"] = IsCharacterSelectionBusy();
+        // Still false when the progress cannot be read, as IsCharacterSelectionBusy answers on the action path,
+        // but here the failure is reported.
+        bool selectionBusy = false;
+        try { selectionBusy = ReadCharacterSelectionBusy(); }
+        catch (Exception ex) { Warn("menu.character_select.selection_busy", ex); }
+        result["selection_busy"] = selectionBusy;
 
         var embarkBtn = GetInstanceFieldValue(charSelect, "_embarkButton");
         if (embarkBtn is NClickableControl embarkClickable && IsNodeVisible(embarkClickable))

@@ -179,7 +179,8 @@ Nothing is waited on when the action returned `"status": "error"`. Singleplayer 
 | `500` | The action ran and threw. |
 | `503` with `"retry": true` | **The action did NOT run.** The game's main thread did not answer within 10 s, or more than 32 requests are already queued — the game is not processing frames (scene load, hang, minimized/paused app). Body: `{ "error": "...", "status": "error", "retry": true }`. Nothing was applied to the run, so the request may be sent again once the game is responsive. |
 
-This applies to GET endpoints too; every request is served from the game's main thread.
+This applies to GET endpoints too: every request is served from the game's main thread, except `GET /` and
+`GET /api/v1/actions`, which are answered without it and never return 503.
 
 ### Menu / Game Over
 
@@ -249,7 +250,8 @@ Example searches:
 `play_card`, and `use_potion` in combat, refuse with a retryable "The play phase has not opened yet" error while
 the game would hold the move until the play phase opens: for a moment after `is_play_phase` turns true, and, for
 a potion, during the turn start too. Nothing is queued; retry. (This keeps every API move inside its own request,
-so the action log tags it `api`.)
+so the action log tags it `api`.) Singleplayer only: `POST /api/v1/multiplayer` does not refuse, and the game holds
+the move until the play phase opens, as before.
 
 ### In-Combat Hand Selection (`hand_select`)
 
