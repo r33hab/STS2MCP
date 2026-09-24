@@ -132,7 +132,8 @@ Every response — `menu` and error-ish states included — carries the build st
 
 `action_log_seq` starts at 0 each time the game starts and then only grows. When it moves,
 `GET /api/v1/actions?since=<the seq you last read>` returns the new moves. `time_scale` is `null` (with a
-`warnings` entry) if it could not be read.
+`warnings` entry) if it could not be read. While the game's hit-stop runs (a fraction of a second on some heavy
+hits, see [`set_time_scale`](#set_time_scale)) it reads lower than the scale that was set.
 
 `schema_version` is bumped **only** when an existing field or action changes meaning or is removed.
 Purely additive changes (new fields, actions, parameters, `state_type`s) do not bump it, so
@@ -1624,6 +1625,13 @@ while the pause menu is open.
 
 The setting lasts until it is changed again or the game restarts, and every state reports it as `time_scale`.
 `wait` is ignored for this action.
+
+**Hit-stop.** Some heavy hits (moves of Vantom, Mecha Knight and Ceremonial Beast) trigger the game's hit-stop:
+it drops the engine's time scale to 0.1, ramps it back up over a fraction of a second, and ends by setting it to
+exactly 1. The mod remembers the scale you set and puts it back as soon as the hit-stop has ended (it checks every
+frame: scale back at 1, a scale other than 1 set through this action, no hit-stop running). So the speed survives
+those fights, and a state read during a hit-stop reports the lower `time_scale` of that moment. The mod only ever
+changes a scale that reads exactly 1; any other value, whoever set it, is left alone.
 
 **Errors:** missing, non-numeric or non-finite `scale`.
 

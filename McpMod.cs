@@ -158,7 +158,7 @@ public static partial class McpMod
     {
         try
         {
-            // Optional settings UI patches should not block the HTTP bridge itself.
+            // Optional patches (the settings UI, hit-stop tracking) should not block the HTTP bridge itself.
             TryApplyHarmonyPatches();
 
             // Expose a completion signal for async room entry; see TrackRoomEntries.
@@ -209,14 +209,16 @@ public static partial class McpMod
         catch (Exception ex)
         {
             GD.Print(
-                $"[STS2 MCP] Optional Harmony settings UI injection skipped: {ex.GetType().Name}: {ex.Message}");
+                $"[STS2 MCP] Optional Harmony patches (settings UI, hit-stop tracking) skipped: {ex.GetType().Name}: {ex.Message}");
         }
     }
 
     private static void ProcessMainThreadQueue()
     {
-        // Once per frame, on the main thread: keep the action log attached to the run's action queue.
+        // Once per frame, on the main thread: keep the action log attached to the run's action queue, and put
+        // the API's time scale back once a hit-stop has ended (McpMod.TimeScale.cs).
         EnsureActionHooks();
+        KeepApiTimeScale();
 
         int processed = 0;
         // The bound comes first: a TryDequeue evaluated before it would take an 11th closure off the queue

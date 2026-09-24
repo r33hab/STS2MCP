@@ -1693,6 +1693,11 @@ public static partial class McpMod
     /// timed wait, so action resolution too. `scale` is clamped to 0.5-10 (1 is normal speed). The
     /// setting is the engine's own and global, so it needs no run, and it lasts until it is changed again
     /// or the game restarts. The state reports the current value as `time_scale`.
+    ///
+    /// The game's hit-stop (the freeze frame on some heavy hits) sets the engine's scale itself, down to 0.1
+    /// and back up to exactly 1. The scale applied here is remembered, and KeepApiTimeScale
+    /// (McpMod.TimeScale.cs) restores it once the hit-stop has ended, so `time_scale` reads lower only while
+    /// a hit-stop runs.
     /// </summary>
     internal static Dictionary<string, object?> ExecuteSetTimeScale(Dictionary<string, JsonElement> data)
     {
@@ -1714,6 +1719,7 @@ public static partial class McpMod
 
         double applied = System.Math.Clamp(requested, MinTimeScale, MaxTimeScale);
         Godot.Engine.TimeScale = applied;
+        _apiTimeScale = applied;
 
         string message = applied == requested
             ? System.FormattableString.Invariant($"Time scale set to {applied:0.##}x")
