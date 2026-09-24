@@ -60,7 +60,7 @@ Every JSON response includes:
   - `enemies[].revive` — present only when that corpse is scheduled to come back: `{ in_turns, hp, power_id, power_name }`. `in_turns` counts enemy turns until it heals itself back up (2 on the turn it dies, 1 on the turn before it stands up, when its `intents` also show `Heal`); `hp` is what it returns with. Both are `null` when they cannot be read. A corpse kept in the fight by a power that never revives it has `alive: false` and no `revive`. Markdown marks the enemy heading `— DEAD` and prints a `⚠ WAITING TO REVIVE in N enemy turn(s) at H HP` line.
 - `in_combat` — on `hand_select` and `card_select` only: `true` when the screen is open in a fight (the room is a combat room and its combat has not ended), and then the payload also carries the fight's `battle` block (built under the same hidden-information rules as in combat) and the combat `player` fields (hand, piles, energy). `false` outside a fight, with nothing else added. `hand_select` is always `true`. `state_type` is unchanged.
 
-Every full card object (hand, deck, card screens) carries `is_upgraded`, `is_upgradable`, `upgrade_level` and `max_upgrade_level` (a card can have more than one upgrade level, so `is_upgraded` does not mean "no upgrade left"). Every card object — hand, piles, deck, card screens — also carries `enchantment` (`{ id, amount }` or `null`), `affliction` (id or `null`) and `fields`, the card's runtime energy-cost overrides as absolute costs: `cost_this_turn`, `cost_until_played`, `cost_for_combat`, each present only when it changes the cost (see `raw-full.md`, "Card state"). Pile entries (`draw_pile` / `discard_pile` / `exhaust_pile`) carry `uid`, `id`, `is_upgraded` and `upgrade_level` (not `is_upgradable` / `max_upgrade_level`), and the `*_ordered` entries are `{ id, is_upgraded, uid }`. On the screens where an upgrade or a pick is being decided — `card_select` with `screen_type: "upgrade"`, `hand_select` with `mode: "upgrade_select"`, and `card_reward` — a card that still has an upgrade left also carries `upgrade_preview`: `{ name, cost, star_cost, description, keywords }` of the card as it would read after one upgrade, built from the game's own upgraded clone. It is absent everywhere else (combat hand, piles, deck list) to keep the payload small.
+Every full card object (hand, deck, card screens) carries `is_upgraded`, `is_upgradable`, `upgrade_level` and `max_upgrade_level` (a card can have more than one upgrade level, so `is_upgraded` does not mean "no upgrade left"). Every card object — hand, piles, deck, card screens — also carries `enchantment` (`{ id, amount }` or `null`), `affliction` (id or `null`) and `fields`, the card's runtime energy-cost overrides as absolute costs: `cost_this_turn`, `cost_until_played`, `cost_for_combat`, each present only when it changes the cost (see `raw-full.md`, "Card state"). Every card object also carries `unplayable`: `true` when the card has the Unplayable keyword (a curse or status such as Wound or Injury, or a card another model makes unplayable), `null` if unreadable; it is printed on the card, and it is what tells a curse in a pile from a playable card, as pile cards have no `can_play`. Pile entries (`draw_pile` / `discard_pile` / `exhaust_pile`) carry `uid`, `id`, `is_upgraded` and `upgrade_level` (not `is_upgradable` / `max_upgrade_level`), and the `*_ordered` entries are `{ id, is_upgraded, uid }`. The cards of `hand_select` and `card_select` carry `uid` as well. A `uid` (`<id>#<n>`) never encodes the draw pile's order: the cards dealt from the deck are numbered in master-deck order (the k-th Strike of `player.deck` is `STRIKE_IRONCLAD#k`), a card made in the fight takes the next number where it first appears (in pile order in the hand, discard or exhaust pile; if first met in the draw pile, by what is visible of it, else randomly), and fresh choose-a-card cards in screen order. On the screens where an upgrade or a pick is being decided — `card_select` with `screen_type: "upgrade"`, `hand_select` with `mode: "upgrade_select"`, and `card_reward` — a card that still has an upgrade left also carries `upgrade_preview`: `{ name, cost, star_cost, description, keywords }` of the card as it would read after one upgrade, built from the game's own upgraded clone. It is absent everywhere else (combat hand, piles, deck list) to keep the payload small.
 
 | `state_type` | Screen | Available Actions |
 |---|---|---|
@@ -265,6 +265,20 @@ the move until the play phase opens, as before.
 
 When `mode` is `upgrade_select`, each selectable card with an upgrade left carries `upgrade_preview` (its upgraded form).
 
+`hand_select` and `card_select` (grids and choose-a-card) carry `selection`, what the screen asks for without its localized text (see `raw-full.md`, "The selection object"):
+
+| Field | Meaning |
+|---|---|
+| `kind` | `HAND` (hand_select), `GRID` (a card_select grid) or `CHOOSE` (choose-a-card) |
+| `pile` | A grid over a combat pile (Headbutt, Seeker Strike, Secret Technique...): `DRAW`, `DISCARD` or `EXHAUST`; `null` for HAND, CHOOSE and grids over other cards (the deck, generated cards) |
+| `prompt_key` | The prompt's localization `table.key` (`card_selection.TO_EXHAUST`, `cards.HEADBUTT.selectionScreenPrompt`; CHOOSE: `gameplay_ui.CHOOSE_CARD_HEADER`); `null` if unreadable |
+| `source` | `{ type, id, uid }` of what opened it: `type` `card` / `potion` / `relic` / `power`, or `unknown` (with `id` and `uid` `null`) when the game names nothing, as for the deck screens outside combat; `uid` only for a card |
+| `min` / `max` | The selector's bounds (`max` 999999999 for "any number"; CHOOSE: `max` 1, `min` 0 if skippable, else 1); `null` if unreadable |
+| `can_skip` | The screen can end with no card (a `min` of 0, a deck screen's close button, choose-a-card's skip); `null` if unreadable |
+| `selected` | Cards already picked, `{ uid, id }`: in pick order on the hand; on a grid in the screen's own set order, the order the game acts on; `[]` for CHOOSE; `null` if unreadable |
+
+It reveals nothing the screen does not show: the prompt, bounds and skip are on screen, the picks are highlighted, and the source was just played, used or triggered in view.
+
 ### Rewards (`rewards`)
 
 | Action | Parameters | When to Use |
@@ -340,6 +354,8 @@ screen only.
 | `cancel_selection` | _(none)_ | Cancel preview, skip (choose-a-card), or close screen. |
 
 On the upgrade screen (`screen_type: "upgrade"`), each card with an upgrade left carries `upgrade_preview` (its upgraded form). The transform/remove screens do not.
+
+Every `card_select` carries `in_combat` (and in a fight the `battle` block) and the `selection` object described under `hand_select` above. A grid over the draw pile lists its cards in the order the screen shows them (the game sorts it by rarity, then name), not in draw order.
 
 **Selection state.** Every grid screen reports what it currently holds selected, so a caller never has to
 count its own presses:

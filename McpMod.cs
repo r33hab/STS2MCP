@@ -158,7 +158,8 @@ public static partial class McpMod
     {
         try
         {
-            // Optional patches (the settings UI, hit-stop tracking) should not block the HTTP bridge itself.
+            // Optional patches (the settings UI, hit-stop tracking, selection sources) should not block the HTTP
+            // bridge itself.
             TryApplyHarmonyPatches();
 
             // Expose a completion signal for async room entry; see TrackRoomEntries.
@@ -209,7 +210,7 @@ public static partial class McpMod
         catch (Exception ex)
         {
             GD.Print(
-                $"[STS2 MCP] Optional Harmony patches (settings UI, hit-stop tracking) skipped: {ex.GetType().Name}: {ex.Message}");
+                $"[STS2 MCP] Optional Harmony patches (settings UI, hit-stop tracking, selection sources) skipped: {ex.GetType().Name}: {ex.Message}");
         }
     }
 

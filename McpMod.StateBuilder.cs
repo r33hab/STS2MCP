@@ -458,6 +458,10 @@ public static partial class McpMod
         var topOverlay = NOverlayStack.Instance?.Peek();
         var currentRoom = runState.CurrentRoom;
         var liveCombatRoom = LiveCombatRoom(currentRoom);
+        // A fight's card uids before anything in this payload hands one out: a selection screen's cards carry them,
+        // and the screen is built before the battle block, whose own refresh would renumber a new fight under them.
+        if (liveCombatRoom != null && CombatManager.Instance.DebugOnlyGetState() is { } liveCombatState)
+            RefreshCardUidRegistry(liveCombatState);
         bool mapIsOpen = IsMapScreenOpenOrVisible();
         // The settings screen is pushed on the run's submenu stack, over everything below.
         // It is checked first so the room underneath is not reported as the live screen.
@@ -2239,9 +2243,9 @@ public static partial class McpMod
                 ["id"] = card.Id.Entry,
                 ["is_upgraded"] = card.IsUpgraded,
                 // The same uid the card carries in hand/draw_pile/discard_pile/exhaust_pile, so
-                // an ordered entry can be matched to its full entry. Those lists are serialized
-                // first (hand, sorted draw pile, discard, exhaust), so every uid is already
-                // assigned and the draw pile's true order never affects the numbering.
+                // an ordered entry can be matched to its full entry. RefreshCardUidRegistry has
+                // numbered every card before any list is serialized (NumberNewCombatCards), so
+                // the draw pile's true order never affects the numbering.
                 ["uid"] = SafeGetStableCardUid(card)
             });
         }
@@ -2268,15 +2272,18 @@ public static partial class McpMod
     // has to be recomputed after every single play, and getting the arithmetic wrong
     // plays the wrong card without any error.
     //
-    // Each card instance gets a uid on first sight that stays with it for the whole
-    // combat, wherever it moves between hand, draw, discard and exhaust.
+    // Each card instance gets a uid that stays with it for the whole combat, wherever it
+    // moves between hand, draw, discard and exhaust. Its number never encodes the draw
+    // pile's hidden order: see NumberNewCombatCards.
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<CardModel, string> _cardUids = new();
     private static readonly Dictionary<string, int> _cardUidNextIndex = new();
     private static object? _cardUidCombatToken;
 
     /// <summary>
     /// Returns this card instance's uid, assigning one on first sight.
-    /// Format is "<card_id>#<n>", counting instances of that card in the order first seen.
+    /// Format is "<card_id>#<n>", counting instances of that card in the order the registry meets them. In combat
+    /// RefreshCardUidRegistry has already numbered every card in the piles (NumberNewCombatCards), so first sight here
+    /// only decides for cards outside them: a choose-a-card screen's fresh cards, in the order the screen shows them.
     /// </summary>
     internal static string GetStableCardUid(CardModel card)
     {
@@ -2293,15 +2300,92 @@ public static partial class McpMod
         return uid;
     }
 
-    /// <summary>Clears card uids when a new combat starts.</summary>
+    /// <summary>
+    /// Clears card uids when a new combat starts, then numbers the cards of the combat that have none yet
+    /// (NumberNewCombatCards). Called before any uid is handed out: by the state (BuildGameStateCore, BuildBattleState),
+    /// the action log and play_card.
+    /// </summary>
     internal static void RefreshCardUidRegistry(ICombatState combatState)
     {
-        if (ReferenceEquals(_cardUidCombatToken, combatState))
-            return;
+        if (!ReferenceEquals(_cardUidCombatToken, combatState))
+        {
+            _cardUidCombatToken = combatState;
+            _cardUids.Clear();
+            _cardUidNextIndex.Clear();
+        }
+        NumberNewCombatCards(combatState);
+    }
 
-        _cardUidCombatToken = combatState;
-        _cardUids.Clear();
-        _cardUidNextIndex.Clear();
+    /// <summary>
+    /// Gives every card the combat's players hold a uid, in an order the draw pile's hidden order cannot influence.
+    ///
+    /// A uid's number counts cards of its id in the order the registry meets them. The draw pile used to be met in
+    /// its displayed order (rarity, then id), where cards that tie keep their true relative order, or a deterministic
+    /// scramble of it: five Strikes were numbered top to bottom, which told a reader which Strike (the upgraded one,
+    /// say) lies above the others. So the cards are numbered here first, before any list is serialized:
+    /// <list type="number">
+    /// <item>the cards dealt from the master deck when the combat began, in master-deck order. Player.PopulateCombatState
+    /// clones each deck card into the draw pile, sets the clone's DeckVersion to that deck card, and only then
+    /// shuffles; so the k-th Strike of the deck list is STRIKE#k, wherever it lies now;</item>
+    /// <item>cards made during the fight that sit in a pile the player sees in order (hand, discard, exhaust, play),
+    /// in that order;</item>
+    /// <item>cards made during the fight first met in the draw pile (a Wound shuffled in), by what the player can see
+    /// of them (id, upgrade level, enchantment, affliction), and where that ties, in random order, never the pile's.</item>
+    /// </list>
+    /// </summary>
+    private static void NumberNewCombatCards(ICombatState combatState)
+    {
+        foreach (var player in combatState.Players)
+        {
+            try
+            {
+                var piles = player.PlayerCombatState;
+                if (piles == null)
+                    continue;
+
+                var deckIndex = new Dictionary<CardModel, int>(ReferenceEqualityComparer.Instance);
+                var deck = player.Deck?.Cards;
+                for (int i = 0; deck != null && i < deck.Count; i++)
+                    deckIndex.TryAdd(deck[i], i);
+
+                var dealt = new List<(int DeckIndex, CardModel Card)>();
+                var seenInOrder = new List<CardModel>();
+                var unseenInDraw = new List<CardModel>();
+                foreach (var pile in piles.AllPiles)
+                {
+                    foreach (var card in pile.Cards)
+                    {
+                        if (_cardUids.TryGetValue(card, out _))
+                            continue;
+                        if (card.DeckVersion is { } deckCard && deckIndex.TryGetValue(deckCard, out int index))
+                            dealt.Add((index, card));
+                        else if (pile.Type == PileType.Draw)
+                            unseenInDraw.Add(card);
+                        else
+                            seenInOrder.Add(card);
+                    }
+                }
+
+                foreach (var (_, card) in dealt.OrderBy(d => d.DeckIndex))
+                    GetStableCardUid(card);
+                foreach (var card in seenInOrder)
+                    GetStableCardUid(card);
+                if (unseenInDraw.Count > 0)
+                {
+                    var shuffled = unseenInDraw.ToArray();
+                    Random.Shared.Shuffle(shuffled);
+                    // OrderBy is stable: cards alike in everything visible keep the random order.
+                    foreach (var card in shuffled
+                                 .OrderBy(c => c.Id.Entry, StringComparer.Ordinal)
+                                 .ThenBy(c => c.CurrentUpgradeLevel)
+                                 .ThenBy(c => c.Enchantment?.Id.Entry ?? "", StringComparer.Ordinal)
+                                 .ThenBy(c => c.Enchantment?.Amount ?? 0)
+                                 .ThenBy(c => c.Affliction?.Id.Entry ?? "", StringComparer.Ordinal))
+                        GetStableCardUid(card);
+                }
+            }
+            catch (Exception ex) { Warn("card.uid", ex); }
+        }
     }
 
     /// <summary>
@@ -3560,6 +3644,7 @@ public static partial class McpMod
 
             var cardInfo = BuildCardInfo(card);
             cardInfo["index"] = index;
+            cardInfo["uid"] = SafeGetStableCardUid(card);
             if (selection != null)
             {
                 bool isSelected = selection.Contains(card);
@@ -3650,6 +3735,10 @@ public static partial class McpMod
         }
         state["can_confirm"] = canConfirm;
 
+        // What the screen asks for, without its localized text, and what opened it (McpMod.Selection.cs).
+        try { state["selection"] = BuildGridSelection(screen); }
+        catch (Exception ex) { Warn("card_select.selection", ex); state["selection"] = null; }
+
         return state;
     }
 
@@ -3670,6 +3759,7 @@ public static partial class McpMod
 
             var cardInfo = BuildCardInfo(card);
             cardInfo["index"] = index;
+            cardInfo["uid"] = SafeGetStableCardUid(card);
             cards.Add(cardInfo);
             index++;
         }
@@ -3680,6 +3770,9 @@ public static partial class McpMod
         state["preview_showing"] = false;
         state["can_confirm"] = false;
         state["can_cancel"] = state["can_skip"];
+
+        try { state["selection"] = BuildChooseSelection(screen); }
+        catch (Exception ex) { Warn("card_select.selection", ex); state["selection"] = null; }
 
         return state;
     }
@@ -3778,6 +3871,7 @@ public static partial class McpMod
 
             var cardInfo = BuildCardInfo(card);
             cardInfo["index"] = index;
+            cardInfo["uid"] = SafeGetStableCardUid(card);
             cardInfo["description"] = SafeGetCardDescription(card); // hand cards use default pile
             // Only when the prompt is "upgrade a card in hand"; the plain select modes
             // (discard, exhaust, ...) have nothing to decide from the upgraded text.
@@ -3844,6 +3938,9 @@ public static partial class McpMod
         // Confirm button state
         var confirmBtn = hand.GetNodeOrNull<NConfirmButton>("%SelectModeConfirmButton");
         state["can_confirm"] = confirmBtn?.IsEnabled ?? false;
+
+        try { state["selection"] = BuildHandSelection(hand); }
+        catch (Exception ex) { Warn("hand_select.selection", ex); state["selection"] = null; }
 
         return state;
     }

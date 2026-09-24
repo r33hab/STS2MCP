@@ -33,15 +33,28 @@ public static partial class McpMod
     // ------------------------------------------------------------------ cards
 
     /// <summary>
-    /// Adds `enchantment`, `affliction` and `fields` to a card object. Called for every card the
-    /// state reports: the hand, the draw/discard/exhaust piles, the run deck and the card screens
-    /// that share BuildCardInfo.
+    /// Adds `enchantment`, `affliction`, `fields` and `unplayable` to a card object. Called for every
+    /// card the state reports: the hand, the draw/discard/exhaust piles, the run deck and the card
+    /// screens that share BuildCardInfo.
     /// </summary>
     private static void AddCardExtras(Dictionary<string, object?> cardInfo, CardModel card)
     {
         cardInfo["enchantment"] = BuildEnchantmentState(card);
         cardInfo["affliction"] = GetAfflictionId(card);
         cardInfo["fields"] = BuildCardFields(card);
+        cardInfo["unplayable"] = IsUnplayable(card);
+    }
+
+    /// <summary>
+    /// Whether the card has the Unplayable keyword, its own or one another model gives it in combat
+    /// (CardModel.Keywords): the check CardModel.CanPlay makes for UnplayableReason.HasUnplayableKeyword.
+    /// Printed on the card, so it reveals nothing; it is what tells a curse in a pile from a card that
+    /// can be played, since pile cards carry no can_play. Null, with a warning, if unreadable.
+    /// </summary>
+    private static bool? IsUnplayable(CardModel card)
+    {
+        try { return card.Keywords.Contains(CardKeyword.Unplayable); }
+        catch (Exception ex) { Warn("card.unplayable", ex); return null; }
     }
 
     private static Dictionary<string, object?>? BuildEnchantmentState(CardModel card)

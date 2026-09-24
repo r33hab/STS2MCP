@@ -97,7 +97,8 @@ A few fields reveal what the game never shows the player. They are left out of e
 
 They never appear in `POST` responses (including the `state` a `wait: true` action returns), on the multiplayer
 endpoint, or in markdown output. `hand_ordered`, `discard_pile_ordered` and `exhaust_pile_ordered` are always
-reported in combat, because the game shows those piles in their true order.
+reported in combat, because the game shows those piles in their true order. Card `uid`s are numbered so that they
+never encode the draw order either (see [Card uids](#card-object-in-hand)).
 
 ---
 
@@ -315,9 +316,23 @@ reason is in `warnings`.
   "keywords": [ /* Keyword Objects */ ],
   "enchantment": null,       // { "id": "SHARP", "amount": 3 } when enchanted — see "Card state"
   "affliction": null,        // Affliction id such as "BOUND" when afflicted
-  "fields": {}               // Runtime cost overrides — see "Card state"
+  "fields": {},              // Runtime cost overrides — see "Card state"
+  "unplayable": false        // The Unplayable keyword — see "Card state"
 }
 ```
+
+**Card uids.** `uid` names one card instance for the whole combat, as `<id>#<n>`, and `play_card` accepts it.
+Its number never encodes where a card lies in the draw pile. When the mod first reads a fight (a state read, an
+action-log entry or a `play_card`), it numbers the cards dealt from the master deck in master-deck order, so the
+k-th Strike of `player.deck` is `STRIKE_IRONCLAD#k` wherever the shuffle put it (the game's
+`Player.PopulateCombatState` links each dealt card to its deck card before shuffling). A card made during the
+fight takes the next number of its id where it first appears: in pile order if that is the hand, discard, exhaust
+or play pile, which the player sees in order; if it is first met in the draw pile (a Wound shuffled in), by what the
+player can see of it (upgrade, enchantment, affliction) and, between cards alike in all of that, in random order.
+Fresh cards on a choose-a-card screen are numbered in the order the screen shows them. Outside combat, the cards
+of a `card_select` screen (deck cards) carry uids too; those last until the next fight starts. (The multiplayer
+endpoint, left as it was, does not number a fight's cards before its state reads list them, so there a card can
+take its number on first sight.)
 
 ### Card state (every card object)
 
@@ -326,6 +341,10 @@ Every card object — in `hand`, the Pile Card Objects, `deck`, and the card scr
 
 - `enchantment` — `{ "id": "SHARP", "amount": 3 }`: the enchantment's id and its amount, or `null`.
 - `affliction` — the affliction's id (e.g. `"BOUND"`), or `null`.
+- `unplayable` — `true` when the card has the Unplayable keyword now: a curse or status such as Wound, Injury or
+  Dazed, or a card another model makes unplayable (the game's `CardModel.Keywords`, the check `CardModel.CanPlay`
+  makes for its `Unplayable` reason). It is printed on the card, so it reveals nothing. Pile cards carry no
+  `can_play`, so this is what tells a curse in the draw pile from a card that can be played.
 - `fields` — the card's runtime **energy-cost overrides** (Bullet Time, Enlightenment, Eidolon, Kingly
   Kick...), as absolute costs, each present only when it changes the cost. `{}` when there are none, which
   is always the case for an X-cost card and a card that cannot be played (the game ignores overrides on
@@ -345,8 +364,8 @@ Every card object — in `hand`, the Pile Card Objects, `deck`, and the card scr
   then clamps at 0; a relative override that overshoots (a Kingly Kick drawn often enough) is reported
   below 0, as the game holds it. `cost` is the resulting number the card shows.
 
-`enchantment`, `affliction` and `fields` are `null` when they could not be read; the reason is in
-`warnings`.
+`enchantment`, `affliction`, `fields` and `unplayable` are `null` when they could not be read; the reason
+is in `warnings`.
 
 ### Pile Card Object (draw/discard/exhaust piles)
 
@@ -362,7 +381,8 @@ Every card object — in `hand`, the Pile Card Objects, `deck`, and the card scr
   "upgrade_level": 0,
   "enchantment": null,       // See "Card state"
   "affliction": null,
-  "fields": {}
+  "fields": {},
+  "unplayable": false        // true for a curse or status (Wound, Injury...): see "Card state"
 }
 ```
 
@@ -723,7 +743,8 @@ It always happens in a fight, so it always carries `in_combat: true` and the fig
     "cards": [
       {
         "index": 0,
-        "id": "STRIKE_R",
+        "uid": "STRIKE_IRONCLAD#1", // The card's uid, as in player.hand
+        "id": "STRIKE_IRONCLAD",
         "name": "Strike",
         "type": "Attack",
         "cost": "1",
@@ -736,7 +757,16 @@ It always happens in a fight, so it always carries `in_combat: true` and the fig
     "selected_cards": [          // Only present if cards have been selected
       { "index": 0, "name": "Defend" }
     ],
-    "can_confirm": false
+    "can_confirm": false,
+    "selection": {               // See "The selection object"
+      "kind": "HAND",
+      "pile": null,
+      "prompt_key": "card_selection.TO_EXHAUST",
+      "source": { "type": "card", "id": "BURNING_PACT", "uid": "BURNING_PACT#0" },
+      "min": 1, "max": 1,
+      "can_skip": false,
+      "selected": [ { "uid": "DEFEND_IRONCLAD#3", "id": "DEFEND_IRONCLAD" } ]
+    }
   },
   "in_combat": true,  // Always true here
   "battle": { ... },  // The fight's battle block, as the combat state carries it
@@ -1084,7 +1114,8 @@ Toolbox). A fight's `card_select` carries `in_combat: true` and the `battle` blo
     "cards": [
       {
         "index": 0,
-        "id": "STRIKE_R",
+        "uid": "STRIKE_IRONCLAD#1", // The card's uid (in a fight, the same as in the piles)
+        "id": "STRIKE_IRONCLAD",
         "name": "Strike",
         "type": "Attack",
         "cost": "1",
@@ -1109,6 +1140,8 @@ Toolbox). A fight's `card_select` carries `in_combat: true` and the `battle` blo
 
     // For "choose" type: picking is immediate (no confirm needed).
     // can_skip indicates if a skip button exists.
+
+    "selection": { /* See "The selection object" */ }
   },
   "in_combat": false,  // true when a fight opened it; then "battle" follows, as in combat
   "run": { ... },
@@ -1137,6 +1170,59 @@ carry the fight with them, so a client can tell the decision is part of the comb
 stays `hand_select` / `card_select`, so a client that only reads the screen block is unaffected. In a fight they
 carry no map block (outside one, `card_select` does, like the other decision screens). Markdown renders the battle
 above the selection, as it always has for `hand_select`.
+
+### The selection object
+
+`hand_select` and `card_select` (every grid screen and choose-a-card, in a fight or not) carry `selection`: what the
+screen asks for, in the game's own terms instead of its localized text, and what opened it. Its cards (`source`,
+`selected`) carry the same `uid` as the screen's `cards` and, in a fight, the piles.
+
+```jsonc
+"selection": {
+  "kind": "GRID",               // HAND (hand_select) | GRID (a card_select grid) | CHOOSE (choose-a-card)
+  "pile": "DISCARD",            // a grid over a combat pile: DRAW | DISCARD | EXHAUST; otherwise null
+  "prompt_key": "cards.HEADBUTT.selectionScreenPrompt",   // the prompt's localization table.key
+  "source": { "type": "card", "id": "HEADBUTT", "uid": "HEADBUTT#0" },   // what opened the screen
+  "min": 1, "max": 1,           // how many cards a confirmed pick holds
+  "can_skip": false,            // the screen can end with no card
+  "selected": [ { "uid": "STRIKE_IRONCLAD#2", "id": "STRIKE_IRONCLAD" } ]   // already picked
+}
+```
+
+| Field | Value | `null` when |
+|---|---|---|
+| `kind` | The screen's shape: `HAND` picks from the hand, `GRID` from a grid of cards, `CHOOSE` one of up to three freshly made cards. It is not a game enum; the game has none. | never |
+| `pile` | A grid over a combat pile (the game's `CardSelectCmd.FromCombatPile`: Headbutt, Seeker Strike, Secret Technique, Liquid Memories, Droplet of Precognition): `DRAW`, `DISCARD` or `EXHAUST`. | HAND and CHOOSE; a grid over a list of cards instead of a pile (the deck screens, generated cards) |
+| `prompt_key` | The prompt's localization table and key, joined by a dot, the same in every language: `card_selection.TO_EXHAUST`, `cards.HEADBUTT.selectionScreenPrompt`, `gameplay_ui.CHOOSE_CARD_UPGRADE_HEADER` (Armaments). CHOOSE is always `gameplay_ui.CHOOSE_CARD_HEADER`, its banner. | the prompt cannot be read (with a warning) |
+| `source.type` | `card`, `potion`, `relic` or `power`: what kind of model opened the screen. `unknown` for any other model (an orb, a monster) and when the game names none (below). | never |
+| `source.id` | That model's id (`HEADBUTT`, `ATTACK_POTION`, `GAMBLING_CHIP`, `ENTROPY_POWER`); an `unknown` model the game does name keeps its id. | no model |
+| `source.uid` | The source card's uid. | not a card |
+| `min` / `max` | The selector's bounds, the game's `CardSelectorPrefs.MinSelect` / `MaxSelect`. A "choose any number" prompt (Gambling Chip, Gambler's Brew) has the game's own no-limit `max`, 999999999. CHOOSE: `max` 1, and `min` 0 when it can be skipped, 1 when it cannot. | the screen's prefs cannot be read (with a warning); for CHOOSE, `min` when its skip flag cannot be read |
+| `can_skip` | The screen can end with no card chosen: a hand or grid whose `min` is 0 (its confirm button works with nothing picked), a deck screen that has a close button (the game's `Cancelable`: a shop removal, a smith), a choose-a-card screen with a skip button. So `min` is 0 exactly when `can_skip` is true, except on a closable deck screen. | as `min` |
+| `selected` | The cards already picked, `{uid, id}` each. On the hand, in the order they were picked. On a grid, in the order of the screen's own selection set, which is the order the game acts on them in: the pick order, except that a card picked after a deselect takes the freed place. CHOOSE: always `[]`, as a pick completes the screen. | unreadable (with a warning) |
+
+**The source.** The game never tells the screens what opened them. It hands a hand selection's source to
+`NPlayerHand.SelectCards`, which does not keep it, and it names the model involved in any choice on the choice's
+context (`PlayerChoiceContext.LastInvolvedModel`: the card being played, the potion being used, the relic, power or
+card whose hook is running; the game shows other players that model while they wait). The mod records it as the
+selection starts, with Harmony prefixes on `NPlayerHand.SelectCards` and on `CardSelectCmd.FromCombatPile`,
+`FromSimpleGrid`, `FromSimpleGridForRewards` and `FromChooseACardScreen`, and forgets it when that selection
+completes. It matches each record to the screen it opened (the screen's prompt and pile, or choose-a-card's card
+list), so two selections queued at once, such as two relics at the start of a turn, each report their own.
+`source.type` is `unknown` when:
+- the game names no model: the deck screens (a smith, an event, a relic picked up), which run without a choice
+  context, and the selections the game starts with an empty one (the Massive Scroll, Hefty Tablet and Lead
+  Paperweight picks, an event's card grid, the Knowledge Demon's choice);
+- the model is not a card, potion, relic or power (`source.id` names it);
+- the patches could not bind to the game (after a game update; the game log says which, and every screen then
+  reads `unknown`).
+
+**Nothing hidden.** `selection` reveals nothing the screen does not show. The prompt, the bounds and whether the
+screen can be skipped are on it, the picks are highlighted there, and the source card was just played in view (or
+the potion used, the relic or power triggered on screen). A grid over the draw pile (Seeker Strike, Secret
+Technique) lists its `cards` in the order the screen shows them: the game sorts that grid by rarity and then name,
+not in draw order, and the mod reads the order off the screen, adding nothing to it. Their uids do not encode the
+draw order either (see "Card uids").
 
 ### `bundle_select` — Card Bundle Selection Overlay
 

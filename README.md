@@ -32,7 +32,8 @@ several of them exist because `v0.107` removed or moved what upstream relied on.
 All additions are on the HTTP API (`POST /api/v1/singleplayer` with an `action` field, or the state
 returned by `GET /api/v1/singleplayer`). **They are not exposed through the bundled MCP server.**
 [docs/raw-full.md](docs/raw-full.md) documents the fork's state fields (the ordered piles, the run deck,
-the simulator fields of schema 4, `run.map_coord` and the map on the screens outside combat), the player
+the simulator fields of schema 4, `run.map_coord` and the map on the screens outside combat,
+`player.character_id`, the in-combat selection screens' `battle` and `selection`, the cards' `unplayable`), the player
 action log (`GET /api/v1/actions`, each move tagged human or API), the `set_time_scale` action and its
 access control (token, hidden state, debug gate); the other actions below are documented in this section
 and in [FORK_NOTES.md](FORK_NOTES.md).
