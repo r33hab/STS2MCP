@@ -219,7 +219,9 @@ public static partial class McpMod
         EnsureActionHooks();
 
         int processed = 0;
-        while (_mainThreadQueue.TryDequeue(out var action) && processed < 10)
+        // The bound comes first: a TryDequeue evaluated before it would take an 11th closure off the queue
+        // and then drop it, and that request would wait out its timeout (a 503) for nothing.
+        while (processed < 10 && _mainThreadQueue.TryDequeue(out var action))
         {
             try { action(); }
             catch (Exception ex) { GD.PrintErr($"[STS2 MCP] Main thread action error: {ex}"); }
