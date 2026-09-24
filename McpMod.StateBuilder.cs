@@ -1649,6 +1649,7 @@ public static partial class McpMod
         var combatState = player.PlayerCombatState;
 
         state["character"] = SafeGetText(() => player.Character.Title);
+        state["character_id"] = SafeGetCharacterId(player, "player.character_id");
         state["hp"] = creature.CurrentHp;
         state["max_hp"] = creature.MaxHp;
         state["block"] = creature.Block;
@@ -1807,6 +1808,16 @@ public static partial class McpMod
         AddDeckState(state, player, inCombat);
 
         return state;
+    }
+
+    /// <summary>
+    /// The character's model id ("IRONCLAD"): what `character_id` reports beside `character`, which is the
+    /// character's title in the game's current language ("The Ironclad"). Null, with a warning, if unreadable.
+    /// </summary>
+    private static string? SafeGetCharacterId(Player player, string context)
+    {
+        try { return player.Character.Id.Entry; }
+        catch (Exception ex) { Warn(context, ex); return null; }
     }
 
     /// <summary>

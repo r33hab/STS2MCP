@@ -191,7 +191,8 @@ Always present at the top level (except `menu`). Contains everything about the l
 
 ```jsonc
 {
-  "character": "The Ironclad",
+  "character": "The Ironclad",   // The character's title, in the game's current language
+  "character_id": "IRONCLAD",    // The character's id: the same in every language
   "hp": 72,
   "max_hp": 80,
   "block": 0,
@@ -262,6 +263,11 @@ Always present at the top level (except `menu`). Contains everything about the l
   "deck": [ /* Deck Card Objects, see below */ ]
 }
 ```
+
+**The character.** `character` is the character's title as the game shows it, so it changes with the game's
+language ("The Ironclad" in English). `character_id` is the character model's id (`IRONCLAD`, `SILENT`,
+`DEFECT`, `NECROBINDER`, `REGENT`), the same in every language; match on that one. It is `null` only when it
+could not be read, and `warnings` then names `player.character_id`.
 
 **The run deck.** `deck_count` and `deck` are present on every screen, combat included, as soon as the
 run has a deck (before the starting deck is dealt out, `deck` is empty and `deck_count` is 0). In a fight
@@ -2046,6 +2052,7 @@ Finish the Crystal Sphere minigame.
   "players": [                  // Summary of all players
     {
       "character": "The Ironclad",
+      "character_id": "IRONCLAD",   // As in the Player Object: the same in every language
       "hp": 72, "max_hp": 80,
       "gold": 99,
       "is_alive": true,
@@ -2067,6 +2074,7 @@ Finish the Crystal Sphere minigame.
   "players": [
     {
       "character": "The Ironclad",
+      "character_id": "IRONCLAD",
       "hp": 72, "max_hp": 80,
       "gold": 99,
       "is_alive": true,
@@ -2075,6 +2083,7 @@ Finish the Crystal Sphere minigame.
     },
     {
       "character": "The Necrobinder",
+      "character_id": "NECROBINDER",
       "hp": 60, "max_hp": 66,
       "gold": 80,
       "is_alive": true,

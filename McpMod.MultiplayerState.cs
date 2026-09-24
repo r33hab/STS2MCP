@@ -417,6 +417,7 @@ public static partial class McpMod
             var entry = new Dictionary<string, object?>
             {
                 ["character"] = SafeGetText(() => player.Character.Title),
+                ["character_id"] = SafeGetCharacterId(player, "players.character_id"),
                 ["is_local"] = LocalContext.IsMe(player),
                 ["hp"] = player.Creature.CurrentHp,
                 ["max_hp"] = player.Creature.MaxHp,
