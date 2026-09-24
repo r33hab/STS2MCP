@@ -1042,8 +1042,20 @@ public static partial class McpMod
         return null;
     }
 
+    /// <summary>
+    /// The button that dismisses a tutorial popup, or null while none is pressable.
+    ///
+    /// Never the popup's _sneakyHitbox. A tutorial that points at a control underneath it lays that stand-in
+    /// over the control: NCannotPlayCardFtue over the End Turn button, where pressing it ends the turn
+    /// (NEndTurnButton.SecretEndTurnLogicViaFtue), and NMerchantFtue over the merchant, where it opens the
+    /// shop. "advance" / "proceed" only dismiss the popup: through the stand-in they would also end the turn,
+    /// and the action log would tag that end turn "human". So while only the stand-in is pressable, nothing is
+    /// found and the caller retries once the popup's own button is up.
+    /// </summary>
     private static NClickableControl? FindFtueAdvanceButton(Node ftue)
     {
+        var sneakyHitbox = GetInstanceFieldValue(ftue, "_sneakyHitbox");
+
         foreach (var fieldName in new[]
         {
             "_confirmButton",
@@ -1071,6 +1083,7 @@ public static partial class McpMod
                          System.Reflection.BindingFlags.Instance))
             {
                 if (field.GetValue(ftue) is NClickableControl fieldButton &&
+                    !ReferenceEquals(fieldButton, sneakyHitbox) &&
                     IsPopupButtonActionable(fieldButton))
                 {
                     return fieldButton;
@@ -1084,7 +1097,7 @@ public static partial class McpMod
 
         foreach (var button in FindAll<NClickableControl>(ftue))
         {
-            if (IsPopupButtonActionable(button))
+            if (!ReferenceEquals(button, sneakyHitbox) && IsPopupButtonActionable(button))
                 return button;
         }
 

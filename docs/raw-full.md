@@ -1445,15 +1445,22 @@ tagged with who made it. A coach uses it to know exactly which move was made, so
   Seqs are consecutive. They start again at 1 each time the game starts: the log is kept in memory, not saved.
 - **Capacity.** The log keeps the newest 2000 entries. If the first entry you get has a `seq` above `since + 1`,
   the entries in between were dropped.
-- **What counts as a move.** An entry is written when the game queues the request: when you click (or the API
-  acts), not when the move resolves. The game can still cancel a queued request, for example a card queued behind
-  the play that ends the combat; the log does not revise the entry, and the next state shows what happened. Only
-  the End Turn button and the API's `end_turn` produce `end_turn` entries: a turn the game ends by itself (Void
-  Form, a player dying on their own turn) is not a move. Cards the game plays by itself (auto-plays) are not
-  logged either. Potions are logged in and out of combat; selling a potion to the merchant is a `use_potion`.
-- **Who made it.** `api` means the mod performed the move for a `POST /api/v1/singleplayer` request (`play_card`,
-  `use_potion`, `sell_potion` or `end_turn`); everything else is `human`. To keep that exact, `play_card` and an
-  in-combat `use_potion` refuse while the game would hold the move for the play phase (see [`play_card`](#play_card)).
+- **What counts as a move.** An entry is written when the game enqueues the request, not when the move resolves.
+  That is normally the moment you click (or the API acts). The exception is a card or potion used while the game is
+  holding play-phase moves (during the enemy turn and the start of your turn): the game parks it and enqueues it when
+  your play phase opens, and it is logged then, with the `utc`, `act`, `floor` and `round` of that moment. The game
+  can still cancel a queued request, for example a card queued behind the play that ends the combat; the log does not
+  revise the entry, and the next state shows what happened. Only the End Turn button and the API's `end_turn`
+  produce `end_turn` entries: a turn the game ends by itself (Void Form, a player dying on their own turn) is not a
+  move. Cards the game plays by itself (auto-plays) are not logged either. Potions are logged in and out of combat;
+  selling a potion to the merchant is a `use_potion`.
+- **Who made it.** `api` is exactly the move the mod itself enqueued for a `POST /api/v1/singleplayer` request: the
+  card play `play_card` built, the potion use `use_potion` or `sell_potion` started, and the API's `end_turn`. It is
+  tagged at that enqueue call, so a move the game releases or queues while the mod is acting stays `human`, and so
+  does everything else. `play_card` and an in-combat `use_potion` refuse while the game would hold the move for the
+  play phase (see [`play_card`](#play_card)), so an API move is never parked and released later. No `menu_select`
+  produces a move: on the tutorial popup over the End Turn button, `advance` only dismisses the popup (see
+  [`menu_select`](#menu_select)).
 - **Singleplayer only**, and only the local player's moves. Nothing is logged during a multiplayer run.
 - Like every endpoint it needs the API token. It is answered from the log itself rather than on the game's main
   thread, so it never returns 503, even while the game is loading. `?pretty=1` works as elsewhere.
@@ -1601,6 +1608,11 @@ Select an option from the main menu, a menu submenu, profile select, character s
 | `seed` | string | No | Only supported in menu contexts that expose a real seeded flow. Standard singleplayer character select currently returns an error without starting a run when `seed` is supplied. |
 
 `game_over` advertises only `main_menu`. `continue` is not actionable on that screen and returns an error.
+On a tutorial popup (`menu_screen: "tutorial"`), `advance` / `proceed` press the popup's own button. Two tutorials
+point at a control underneath them and lay a stand-in over it: the "cannot play this card" tutorial over the End
+Turn button and the merchant tutorial over the merchant. Clicking the stand-in in the game also ends the turn or
+opens the shop. The API never presses it: while only the stand-in can be pressed, `advance` is advertised with
+`enabled: false` and returns a retryable error, so dismissing a tutorial never ends your turn or opens the shop.
 If `timeline` is blocked by pending obtained epochs, `menu_select` returns an error with `manual_action_required: true` and `pending_epoch_ids` instead of opening Timeline.
 On `character_select`, a character pick is refused with a retryable error while `selection_busy` is `true` (the unlock
 animation would overwrite it); after a pick, check `selected_character` before sending `confirm`.

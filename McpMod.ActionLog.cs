@@ -23,8 +23,8 @@ namespace STS2_MCP;
 /// <list type="bullet">
 /// <item>ActionQueueSet.ActionEnqueued sees every card play (PlayCardAction), potion use
 /// (UsePotionAction) and End Turn button press (EndPlayerTurnAction) as the game queues it, the mod's
-/// own play_card and use_potion included. An entry is the request, logged when it is made; the game
-/// can still cancel a queued request (the combat ended first, say), and the log does not follow that
+/// own play_card and use_potion included. An entry is the request, logged when the game enqueues it; the
+/// game can still cancel a queued request (the combat ended first, say), and the log does not follow that
 /// up - the next state shows what happened.</item>
 /// <item>CombatManager.PlayerEndedTurn sees every turn end. The mod's end_turn calls PlayerCmd.EndTurn
 /// directly, with no GameAction to queue, so this is where it is logged. The event also fires for turns
@@ -32,9 +32,17 @@ namespace STS2_MCP;
 /// Turn button's action finally runs; those are not moves, or already logged, and are skipped.</item>
 /// </list>
 ///
-/// Source tagging: ExecuteAction raises _apiDepth around its dispatch, and everything the dispatch does
-/// to the game - RequestEnqueue, PlayerCmd.EndTurn - raises these events synchronously inside it. A
-/// human click is handled by the engine outside any request, so it always sees _apiDepth == 0.
+/// When: an entry is logged at enqueue. For a click that is the click itself, except for a card or potion
+/// used while the game holds play-phase moves (ActionSynchronizerCombatState.NotPlayPhase: the enemy turn and
+/// the start of the player's turn). RequestEnqueue parks that move, and it is enqueued - and logged - only when
+/// the game releases it as the play phase opens.
+///
+/// Source tagging is exact: only the action the mod itself enqueues is "api". play_card and use_potion set
+/// _apiEnqueuing around their one enqueue call - RequestEnqueue of the PlayCardAction play_card built (a play
+/// must also be that very action, _apiPlayCardAction) and EnqueueManualUse - inside which the game raises
+/// ActionEnqueued synchronously; end_turn sets _apiEndingTurn around PlayerCmd.EndTurn. Everything else is
+/// "human", including a held move the game releases while the mod is acting (the mod's own play_card and
+/// use_potion refuse while the game would hold them, so none of its moves is ever parked).
 /// </summary>
 public static partial class McpMod
 {
@@ -49,10 +57,14 @@ public static partial class McpMod
     private static long _actionSeq;
 
     /// <summary>
-    /// Above 0 while ExecuteAction dispatches a client's action on this thread (the main thread).
+    /// True only while play_card's RequestEnqueue or use_potion's EnqueueManualUse runs on this thread (the main
+    /// thread): the game raises ActionEnqueued for the action being queued synchronously inside that call.
     /// Thread-static, so it describes this thread's call stack and nothing else.
     /// </summary>
-    [ThreadStatic] private static int _apiDepth;
+    [ThreadStatic] private static bool _apiEnqueuing;
+
+    /// <summary>The PlayCardAction play_card is enqueuing, set together with _apiEnqueuing: only that very action is "api".</summary>
+    [ThreadStatic] private static PlayCardAction? _apiPlayCardAction;
 
     /// <summary>True while ExecuteEndTurn itself is inside PlayerCmd.EndTurn; see OnPlayerEndedTurn.</summary>
     [ThreadStatic] private static bool _apiEndingTurn;
@@ -72,8 +84,6 @@ public static partial class McpMod
                 return _actionSeq;
         }
     }
-
-    private static string ActionSource() => _apiDepth > 0 ? "api" : "human";
 
     /// <summary>
     /// Keeps the hooks attached. Runs every frame from ProcessMainThreadQueue: RunManager creates a new
@@ -119,9 +129,9 @@ public static partial class McpMod
     {
         try
         {
-            // Singleplayer only: in a multiplayer run the API's own moves come through
-            // /api/v1/multiplayer, which does not raise _apiDepth, so they could not be told from the
-            // player's. (IsMultiplayerRun is exact here: the hooks run on the main thread.)
+            // Singleplayer only: in a multiplayer run a client's move is enqueued when the host's
+            // confirmation arrives, outside the request that made it, so the API's own moves could not be
+            // told from the player's. (IsMultiplayerRun is exact here: the hooks run on the main thread.)
             if (IsMultiplayerRun())
                 return;
 
@@ -131,7 +141,7 @@ public static partial class McpMod
                 {
                     var combatState = play.Player.Creature?.CombatState;
                     var target = SafeActionRead(() => play.Target);
-                    var entry = NewActionLogEntry("play_card");
+                    var entry = NewActionLogEntry("play_card", api: _apiEnqueuing && ReferenceEquals(play, _apiPlayCardAction));
                     entry["card_id"] = SafeActionRead(() => play.CardModelId.Entry);
                     entry["card_uid"] = SafeActionRead(() => PlayedCardUid(play, combatState));
                     entry["target"] = TargetEntityId(target, combatState);
@@ -145,7 +155,7 @@ public static partial class McpMod
                     var target = potion.TargetId is uint targetId
                         ? SafeActionRead(() => combatState?.GetCreature(targetId))
                         : null;
-                    var entry = NewActionLogEntry("use_potion");
+                    var entry = NewActionLogEntry("use_potion", api: _apiEnqueuing);
                     entry["slot"] = (int)potion.PotionIndex;
                     entry["target"] = TargetEntityId(target, combatState);
                     entry["target_combat_id"] = potion.TargetId;
@@ -153,9 +163,10 @@ public static partial class McpMod
                     break;
                 }
                 // In singleplayer only a click creates one: the End Turn button, or the tutorial popup's
-                // stand-in for it. Its owner is all it exposes, which is enough.
+                // stand-in for it (which menu_select never presses: see FindFtueAdvanceButton). The mod's own
+                // end_turn queues no action. Its owner is all it exposes, which is enough.
                 case EndPlayerTurnAction endTurn when LocalContext.NetId == endTurn.OwnerId:
-                    AppendActionLogEntry(NewActionLogEntry("end_turn"));
+                    AppendActionLogEntry(NewActionLogEntry("end_turn", api: false));
                     break;
             }
         }
@@ -169,15 +180,15 @@ public static partial class McpMod
     /// A player's turn ended. Logs only the mod's own end_turn (ExecuteEndTurn sets _apiEndingTurn around
     /// its PlayerCmd.EndTurn call): the End Turn button's end was logged when its action was queued, and
     /// every other way this fires is the game ending the turn by itself, including from inside an API play
-    /// (Void Form), which _apiDepth alone would mistake for the API's end_turn. Must never throw: the game
-    /// raises this in the middle of ending the turn, and does not catch.
+    /// (Void Form). Must never throw: the game raises this in the middle of ending the turn, and does not
+    /// catch.
     /// </summary>
     private static void OnPlayerEndedTurn(Player player, bool canBackOut)
     {
         try
         {
             if (_apiEndingTurn && LocalContext.IsMe(player) && !IsMultiplayerRun())   // singleplayer only, as above
-                AppendActionLogEntry(NewActionLogEntry("end_turn"));
+                AppendActionLogEntry(NewActionLogEntry("end_turn", api: true));
         }
         catch (Exception ex)
         {
@@ -187,9 +198,10 @@ public static partial class McpMod
 
     /// <summary>
     /// A new entry: seq (filled in by AppendActionLogEntry, first so it leads the JSON object), kind,
-    /// source, the UTC time, and act/floor/round from the same objects the state reads them from.
+    /// source ("api" when <paramref name="api"/>, else "human"), the UTC time, and act/floor/round from the
+    /// same objects the state reads them from.
     /// </summary>
-    private static Dictionary<string, object?> NewActionLogEntry(string kind)
+    private static Dictionary<string, object?> NewActionLogEntry(string kind, bool api)
     {
         var runState = SafeActionRead(() => RunManager.Instance.DebugOnlyGetState());
         int? round = SafeActionRead(() => CombatManager.Instance.IsInProgress
@@ -199,7 +211,7 @@ public static partial class McpMod
         {
             ["seq"] = 0L,
             ["kind"] = kind,
-            ["source"] = ActionSource(),
+            ["source"] = api ? "api" : "human",
             ["utc"] = DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss.fff'Z'", CultureInfo.InvariantCulture),
             ["act"] = runState != null ? runState.CurrentActIndex + 1 : null,
             ["floor"] = runState?.TotalFloor,

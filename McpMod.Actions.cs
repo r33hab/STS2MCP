@@ -68,22 +68,6 @@ public static partial class McpMod
         if (covered != null)
             return covered;
 
-        // Everything the dispatch does to the game (RequestEnqueue, PlayerCmd.EndTurn) raises the action
-        // log's events synchronously, on this thread, inside this bracket: they are tagged "api".
-        _apiDepth++;
-        try
-        {
-            return DispatchAction(action, data, runState, player);
-        }
-        finally
-        {
-            _apiDepth--;
-        }
-    }
-
-    private static Dictionary<string, object?> DispatchAction(
-        string action, Dictionary<string, JsonElement> data, RunState runState, Player player)
-    {
         return action switch
         {
             "open_pause_menu" or "pause" => ExecuteOpenPauseMenu(runState),
@@ -291,8 +275,20 @@ public static partial class McpMod
             }
         }
 
-        // Play the card via the action queue (same path as the game UI)
-        RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(new PlayCardAction(card, target));
+        // Play the card via the action queue (same path as the game UI). The action log tags exactly this
+        // action "api": the game raises ActionEnqueued for it inside RequestEnqueue, on this thread.
+        var play = new PlayCardAction(card, target);
+        _apiEnqueuing = true;
+        _apiPlayCardAction = play;
+        try
+        {
+            RunManager.Instance.ActionQueueSynchronizer.RequestEnqueue(play);
+        }
+        finally
+        {
+            _apiEnqueuing = false;
+            _apiPlayCardAction = null;
+        }
 
         return new Dictionary<string, object?>
         {
@@ -449,7 +445,17 @@ public static partial class McpMod
         if (target != null && !potion.IsValidTarget(target))
             return Error($"Potion '{SafeGetText(() => potion.Title)}' cannot target {SafeGetText(() => target.Monster?.Title) ?? "that creature"}");
 
-        potion.EnqueueManualUse(target);
+        // The action log tags this use "api": EnqueueManualUse builds the UsePotionAction and the game raises
+        // ActionEnqueued for it inside the call, on this thread.
+        _apiEnqueuing = true;
+        try
+        {
+            potion.EnqueueManualUse(target);
+        }
+        finally
+        {
+            _apiEnqueuing = false;
+        }
 
         string targetMsg = potion.TargetType switch
         {
