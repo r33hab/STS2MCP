@@ -1592,6 +1592,10 @@ public static partial class McpMod
 
         battle["allies"] = allies;
 
+        // The turn's and the combat's card-play counts, which cards such as Finisher and Stomp
+        // read - see BuildCombatHistory.
+        battle["history"] = BuildCombatHistory(combatState);
+
         return battle;
     }
 
@@ -1722,14 +1726,18 @@ public static partial class McpMod
         var relics = new List<Dictionary<string, object?>>();
         foreach (var relic in player.Relics)
         {
-            relics.Add(new Dictionary<string, object?>
+            var relicState = new Dictionary<string, object?>
             {
                 ["id"] = relic.Id.Entry,
                 ["name"] = SafeGetText(() => relic.Title),
                 ["description"] = SafeGetText(() => relic.DynamicDescription),
                 ["counter"] = relic.ShowCounter ? relic.DisplayAmount : null,
                 ["keywords"] = BuildHoverTips(relic.HoverTipsExcludingRelic)
-            });
+            };
+            // `counter` is the UI number, often transformed (Pen Nib shows AttacksPlayed % 10);
+            // the raw state is added beside it.
+            AddRelicExtras(relicState, relic);
+            relics.Add(relicState);
         }
         state["relics"] = relics;
 
@@ -1821,7 +1829,7 @@ public static partial class McpMod
     /// </summary>
     private static Dictionary<string, object?> BuildCardInfo(CardModel card, PileType pile = PileType.None)
     {
-        return new Dictionary<string, object?>
+        var info = new Dictionary<string, object?>
         {
             ["id"] = card.Id.Entry,
             ["name"] = SafeGetText(() => card.Title),
@@ -1836,6 +1844,8 @@ public static partial class McpMod
             ["max_upgrade_level"] = card.MaxUpgradeLevel,
             ["keywords"] = BuildHoverTips(card.HoverTips)
         };
+        AddCardExtras(info, card);
+        return info;
     }
 
     /// <summary>
@@ -2126,14 +2136,18 @@ public static partial class McpMod
         foreach (var card in cards)
         {
             // Pile cards only need a subset - keep it lightweight
-            list.Add(new Dictionary<string, object?>
+            var entry = new Dictionary<string, object?>
             {
                 ["uid"] = GetStableCardUid(card),
                 ["name"] = SafeGetText(() => card.Title),
                 ["cost"] = GetCostDisplay(card),
                 ["star_cost"] = GetStarCostDisplay(card),
                 ["description"] = SafeGetCardDescription(card, pile)
-            });
+            };
+            // Enough to rebuild the card itself: which card, which upgrade, and what is on it.
+            AddPileCardIdentity(entry, card);
+            AddCardExtras(entry, card);
+            list.Add(entry);
         }
         return list;
     }
@@ -2148,7 +2162,12 @@ public static partial class McpMod
             list.Add(new Dictionary<string, object?>
             {
                 ["id"] = card.Id.Entry,
-                ["is_upgraded"] = card.IsUpgraded
+                ["is_upgraded"] = card.IsUpgraded,
+                // The same uid the card carries in hand/draw_pile/discard_pile/exhaust_pile, so
+                // an ordered entry can be matched to its full entry. Those lists are serialized
+                // first (hand, sorted draw pile, discard, exhaust), so every uid is already
+                // assigned and the draw pile's true order never affects the numbering.
+                ["uid"] = SafeGetStableCardUid(card)
             });
         }
         return list;
@@ -2355,10 +2374,15 @@ public static partial class McpMod
                     }
                 }
                 catch (Exception ex) { Warn("enemy.intent", ex); }
+                // The damage numbers, which the label only carries as text.
+                if (intent is AttackIntent attackIntent)
+                    AddAttackIntentDamage(intentData, attackIntent, creature);
                 intents.Add(intentData);
             }
             state["intents"] = intents;
         }
+
+        AddEnemyAiState(state, creature);
 
         return state;
     }

@@ -73,6 +73,9 @@ restart the game after editing it.
 ```
 
 ```bash
+# The mod's folder; this is the default Steam install on macOS. On Windows and Linux it is
+# <game_install>/mods/STS2_MCP (see the README's install section).
+MODS_DIR="$HOME/Library/Application Support/Steam/steamapps/common/Slay the Spire 2/SlayTheSpire2.app/Contents/MacOS/mods/STS2_MCP"
 TOKEN=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["token"])' "$MODS_DIR/STS2_MCP.conf")
 curl -s -H "X-STS2-Token: $TOKEN" http://localhost:15526/
 ```
@@ -117,7 +120,7 @@ Every response — `menu` and error-ish states included — carries the build st
   "state_type": "...",      // Screen identifier (see sections below)
   "mod_version": "0.4.0",   // Mod version
   "mod_commit": "2de67cd",  // Git commit built from ("<sha>-dirty" from an edited tree); null if unknown
-  "schema_version": 2       // Contract version — see below
+  "schema_version": 4       // Contract version — see below
 }
 ```
 
@@ -125,6 +128,17 @@ Every response — `menu` and error-ish states included — carries the build st
 Purely additive changes (new fields, actions, parameters, `state_type`s) do not bump it, so
 feature-detect additions by presence and use `schema_version` only to notice a breaking change.
 
+- **4** — `player.draw_pile_ordered` is gone from the default payload: the draw pile's true order
+  is [hidden information](#hidden-information), sent only to an opted-in `?hidden=1` read, and
+  every request needs the API token. The same version adds what a simulator needs to rebuild a
+  combat position — enemy `move_id`, `move_follow_up_id`, `is_stunned`, `state_log`, `slot`,
+  `ai_fields` and attack-intent `damage` / `base_damage` / `hits`; card `enchantment`,
+  `affliction` and `fields`; pile card `id` / `is_upgraded` / `upgrade_level`; `uid` on the
+  ordered piles; relic `status`, `is_used_up`, `stack_count`, `saved` and `fields`; and
+  `battle.history` — so a client that relies on those can require `schema_version >= 4`.
+- **3** — `map.next_encounters` is gone. It read which monster / elite / event the act would
+  serve next out of the pre-rolled room list, which the game does not show until the room is
+  entered. `map.encounters_seen` reports what the act has already served instead.
 - **2** — `battle.enemies` is no longer "the living enemies": a corpse the game keeps in the
   fight (a Decimillipede segment waiting to reattach) is listed with `alive: false`. Filter on
   the new `alive` field instead of assuming every entry is a valid target.
@@ -170,7 +184,8 @@ Always present at the top level (except `menu`). Contains everything about the l
   "discard_pile": [ /* Pile Card Objects */ ],
   "exhaust_pile": [ /* Pile Card Objects */ ],
   // The same cards in the game's own order: the hand as in `hand`, and for the piles index 0 is the top.
-  "hand_ordered": [ { "id": "STRIKE_R", "is_upgraded": false } ],
+  // `uid` is the card's uid from `hand` / the Pile Card Objects, so each entry can be matched to its full entry.
+  "hand_ordered": [ { "id": "STRIKE_IRONCLAD", "is_upgraded": false, "uid": "STRIKE_IRONCLAD#0" } ],
   "discard_pile_ordered": [ /* same shape */ ],
   "exhaust_pile_ordered": [ /* same shape */ ],
   "draw_pile_ordered": [ /* same shape; index 0 is drawn next. Hidden information: only with
@@ -194,11 +209,16 @@ Always present at the top level (except `menu`). Contains everything about the l
   "status": [ /* Power Objects */ ],
   "relics": [
     {
-      "id": "BURNING_BLOOD",
-      "name": "Burning Blood",
-      "description": "At the end of combat, heal 6 HP.",
-      "counter": null,       // Number if relic shows a counter, null otherwise
-      "keywords": [ /* Keyword Objects */ ]
+      "id": "PEN_NIB",
+      "name": "Pen Nib",
+      "description": "Every 10th Attack you play deals double damage.",
+      "counter": 3,          // Number if relic shows a counter, null otherwise (the UI number; see below)
+      "keywords": [ /* Keyword Objects */ ],
+      "status": "Normal",    // RelicStatus: "Normal", "Active" or "Disabled"
+      "is_used_up": false,   // A relic with limited uses that has spent them all
+      "stack_count": 1,      // Copies of a stackable relic held as this one entry
+      "saved": { "AttacksPlayed": 13 },  // Its [SavedProperty] values; null if it saves none
+      "fields": { "_attacksPlayed": 13 } // Its class's own int/bool fields; {} if all are 0/false
     }
   ],
   "potions": [
@@ -212,37 +232,106 @@ Always present at the top level (except `menu`). Contains everything about the l
       "keywords": [ /* Keyword Objects */ ]
     }
   ],
-  "max_potion_slots": 3      // Belt capacity. Default 3, grows with belt-expanding relics (e.g. Potion Belt: +2). Use to detect a full belt: len(potions) >= max_potion_slots.
+  "max_potion_slots": 3,     // Belt capacity. Default 3, grows with belt-expanding relics (e.g. Potion Belt: +2). Use to detect a full belt: len(potions) >= max_potion_slots.
+  "deck_count": 12,          // Cards in the master deck
+  "deck": [ /* Deck Card Objects, see below */ ]
 }
 ```
+
+**The run deck.** `deck_count` and `deck` are present on every screen, combat included, as soon as the
+run has a deck (before the starting deck is dealt out, `deck` is empty and `deck_count` is 0). In a fight
+this is still the master deck, not the combat piles: combat works on copies (the draw pile is built from
+them), so cards generated during the fight appear in `hand` and the piles but not here. Each entry is
+a Card Object without the hand-only fields (`uid`, `target_type`, `can_play`, `unplayable_reason`,
+`vs_targets`), plus `index`, its position in this list. Markdown prints the deck outside combat only.
+
+**Relic counters.** `counter` is the number the relic shows, and the game often transforms it: Pen Nib
+shows `AttacksPlayed % 10`, Kunai only shows its count during combat. The raw state is reported beside it:
+
+- `saved` — the relic's `[SavedProperty]` values by property name, i.e. what the game writes to the save
+  file for it (Pen Nib's `AttacksPlayed`, Happy Flower's `TurnsSeen`, Lizard Tail's `WasUsed`). Ints,
+  bools, strings, int arrays, and model ids as their id string; a property that holds whole cards is left
+  out. `null` when the relic saves nothing.
+- `fields` — the int and bool instance fields declared by the relic's own class (and its bases below
+  `RelicModel`), by field name: the per-turn and per-combat counters a save does not keep, such as Kunai's
+  `_attacksPlayedThisTurn` or Centennial Puzzle's `_usedThisCombat`, next to the saved ones. An
+  auto-property's value is keyed by the property name. Fields at `0` / `false` are left out, so a missing
+  key reads as `0` / `false`.
+
+`status`, `is_used_up`, `stack_count`, `saved` and `fields` are `null` when they could not be read; the
+reason is in `warnings`.
 
 ### Card Object (in hand)
 
 ```jsonc
 {
   "index": 0,
-  "id": "STRIKE_R",
+  "uid": "STRIKE_IRONCLAD#0", // This card instance, for the whole combat (play_card accepts it as card_uid)
+  "id": "STRIKE_IRONCLAD",
   "name": "Strike",
   "type": "Attack",          // Attack, Skill, Power, Status, Curse
-  "cost": "1",               // Energy cost as string ("X" for X-cost)
+  "cost": "1",               // Energy cost as string ("X" for X-cost): what it costs to play now
   "star_cost": null,         // Regent star cost as string, null if N/A
   "description": "Deal 6 damage.",
+  "rarity": "Basic",
   "target_type": "AnyEnemy", // None, Self, AnyEnemy, AllEnemies, etc.
   "can_play": true,
   "unplayable_reason": null, // e.g. "NotEnoughEnergy", "Unplayable", null if playable
   "is_upgraded": false,
-  "keywords": [ /* Keyword Objects */ ]
+  "is_upgradable": true,
+  "upgrade_level": 0,
+  "max_upgrade_level": 1,
+  "keywords": [ /* Keyword Objects */ ],
+  "enchantment": null,       // { "id": "SHARP", "amount": 3 } when enchanted — see "Card state"
+  "affliction": null,        // Affliction id such as "BOUND" when afflicted
+  "fields": {}               // Runtime cost overrides — see "Card state"
 }
 ```
+
+### Card state (every card object)
+
+Every card object — in `hand`, the Pile Card Objects, `deck`, and the card screens (`hand_select`,
+`card_select`, `card_reward`, `shop`...) — carries the card's own state beside its text:
+
+- `enchantment` — `{ "id": "SHARP", "amount": 3 }`: the enchantment's id and its amount, or `null`.
+- `affliction` — the affliction's id (e.g. `"BOUND"`), or `null`.
+- `fields` — the card's runtime **energy-cost overrides** (Bullet Time, Enlightenment, Eidolon, Kingly
+  Kick...), as absolute costs, each present only when it changes the cost. `{}` when there are none, which
+  is always the case for an X-cost card and a card that cannot be played (the game ignores overrides on
+  those):
+
+  | Key | Cost it reports | Present when |
+  |---|---|---|
+  | `cost_this_turn` | What the card costs right now, every override applied | it differs from `cost_until_played` or from `cost_for_combat` (an absent `cost_until_played` means the same as `cost_for_combat`, an absent `cost_for_combat` the base cost) |
+  | `cost_until_played` | What it will cost after this turn if it is still unplayed — the "until played" overrides still apply | it differs from `cost_for_combat` |
+  | `cost_for_combat` | What it costs once every temporary override has worn off (the "this combat" overrides) | it differs from the card's base cost |
+
+  So `cost_this_turn ?? cost_until_played ?? cost_for_combat ?? base` is always the current cost, and a
+  reader that only looks at `cost_this_turn` and `cost_for_combat` still gets the current cost right. The
+  base cost is the card's printed cost with its upgrades — an upgrade is not an override, so an upgraded
+  card with no overrides has `fields: {}`. These are the card's own costs, before the global modifiers
+  that other cards, powers and relics apply (Corruption, Enthralled...), which the game adds on top and only
+  then clamps at 0; a relative override that overshoots (a Kingly Kick drawn often enough) is reported
+  below 0, as the game holds it. `cost` is the resulting number the card shows.
+
+`enchantment`, `affliction` and `fields` are `null` when they could not be read; the reason is in
+`warnings`.
 
 ### Pile Card Object (draw/discard/exhaust piles)
 
 ```jsonc
 {
+  "uid": "STRIKE_IRONCLAD#1", // The same uid the card has in hand; stable for the whole combat
   "name": "Strike",
   "cost": "1",               // Energy cost as string ("X" for X-cost)
-  "star_cost": null,          // Regent star cost as string, null if N/A
-  "description": "Deal 6 damage."
+  "star_cost": null,         // Regent star cost as string, null if N/A
+  "description": "Deal 6 damage.",
+  "id": "STRIKE_IRONCLAD",
+  "is_upgraded": false,
+  "upgrade_level": 0,
+  "enchantment": null,       // See "Card state"
+  "affliction": null,
+  "fields": {}
 }
 ```
 
@@ -453,22 +542,34 @@ Run state or room type not recognized.
     "is_play_phase": true,
     "enemies": [
       {
-        "entity_id": "JAW_WORM_0",    // Synthesized ID for targeting
+        "entity_id": "TOADPOLE_0",    // Synthesized ID for targeting
         "combat_id": 42,               // Internal combat ID
-        "name": "Jaw Worm",
+        "name": "Toadpole",
         "alive": true,                 // Always present. false = dead but still in the fight
-        "hp": 44,
-        "max_hp": 44,
+        "hp": 18,
+        "max_hp": 23,
         "block": 0,
         "status": [ /* Power Objects */ ],
         "intents": [
           {
             "type": "Attack",          // Attack, Defend, Buff, Debuff, Sleep, etc.
-            "label": "11",             // Damage number or short label
+            "label": "10",             // Damage number or short label
             "title": "Attack",         // Hover tip title
-            "description": "Deals 11 damage."  // Hover tip description
+            "description": "Deals 10 damage.", // Hover tip description
+            "damage": 10,              // Attack intents only: per hit, as the intent shows it (7 × 1.5, the player is Vulnerable)
+            "base_damage": 7,          // Attack intents only: per hit, before any modifier
+            "hits": 1                  // Attack intents only: number of hits
           }
-        ]
+        ],
+        "move_id": "WHIRL_MOVE",       // The move it will perform next (the game's move state id)
+        "move_follow_up_id": "SPIKEN_MOVE", // The state wired after that move: a move id or a branch state's id
+        "is_stunned": false,
+        "state_log": ["SPIKEN_MOVE", "SPIKE_SPIT_MOVE", "WHIRL_MOVE"], // Moves its AI has rolled, oldest first
+        "slot": 0,                     // Position among the enemy slots
+        "ai_fields": {                 // The monster class's own state, by C# member name
+          "_isFront": true, "IsFront": true,
+          "SpikeSpitDamage": 3, "SpikeSpitRepeat": 3, "WhirlDamage": 7, "SpikenAmount": 2
+        }
       },
       {
         // A dead enemy the game keeps in the fight (a Decimillipede segment waiting to
@@ -487,14 +588,67 @@ Run state or room type not recognized.
           "power_name": "Reattach",
           "hp": 25                     // HP it returns with; null when not readable
         },
-        "intents": []                  // Becomes a Heal intent on the turn before the revive
+        "intents": [],                 // Becomes a Heal intent on the turn before the revive
+        "move_id": "DEAD_MOVE",
+        "move_follow_up_id": "REATTACH_MOVE"
+        // ...and is_stunned, state_log, slot, ai_fields as above
       }
-    ]
+    ],
+    "allies": [ /* Osty and other pets, in the same shape; their slot is null */ ],
+    "history": {                       // The local player's card plays (see below)
+      "cards_played_this_turn": 2,
+      "attacks_played_this_turn": 1,
+      "skills_played_this_turn": 1,
+      "powers_played_this_turn": 0,
+      "cards_played_this_combat": 9
+    }
   },
   "run": { ... },
   "player": { ... }  // Includes hand, energy, piles, orbs during combat
 }
 ```
+
+**Enemy moves and AI.** These let a simulator carry each enemy's AI on from the current position. They
+report what the player has seen or can work out from it; the AI's randomness (its RNG, seeds and counters)
+is never read, and of the move graph only the moves already rolled and the edge out of the current move
+appear:
+
+- `move_id` — the id of the move the enemy will perform next (`MoveState.StateId`, e.g. `"WHIRL_MOVE"`),
+  whose intents are `intents`. `"STUNNED"` while stunned; `"UNSET_MOVE"`, the game's placeholder, before
+  its first move is rolled.
+- `move_follow_up_id` — the state the game has wired to follow that move: another move's id, or the id of a
+  branch state (a random or conditional choice), which is only resolved when the move after this one is
+  rolled. For `"STUNNED"` it is the move the enemy resumes with. `null` when there is none.
+- `is_stunned` — `true` while the enemy's move is the stun (the game's `Creature.IsStunned`).
+- `state_log` — the move ids its AI has rolled this combat, oldest first, repeats included: the game's
+  `MonsterMoveStateMachine.StateLog`, which its repeat and cooldown rules read. The current move is
+  normally the last entry. Branch states never appear in it, and neither does a move put in place without a
+  roll (the stun's `"STUNNED"`, a Decimillipede segment's `"DEAD_MOVE"`). `null` when the enemy has no move
+  machine.
+- `slot` — its position among the enemy slots. An encounter that declares named slots (Exoskeletons,
+  Two-Tailed Rats, Living Fog...) puts each enemy in a fixed slot and summons into the free ones; `slot` is
+  that slot's index in the encounter's list, and it does not change when a neighbour dies. Other encounters
+  lay their enemies out left to right in the order they act; there `slot` is the index in that order, and
+  it drops by one when an enemy before it leaves the fight. `null` for allies.
+- `ai_fields` — the monster class's own state, by C# member name: the int, bool, enum (by name) and string
+  instance fields and properties that its class (and any base class below `MonsterModel`) declares, such as
+  a Toadpole's `IsFront` or a Two-Tailed Rat's `_turnsUntilSummonable`. A property that only wraps a field
+  appears under both names, and derived numbers such as a move's damage at the current ascension appear
+  too. Values at their type's default (`false`, `0`, an enum's zero value, `null`) are left out, so a
+  missing key reads as that default; a nullable number is left out only when it is `null`.
+
+**Attack intents.** An intent that is an attack — `type` `"Attack"`, or `"DeathBlow"` — carries its numbers,
+which `label` only has as text: `damage` is the per-hit damage the intent shows the player (the move's
+damage after the game's damage modifiers against you: the enemy's Strength and Weak, your Vulnerable, and
+so on), `base_damage` the move's own per-hit damage before any of them, and `hits` the number of hits. Other
+intents have none of the three.
+
+Each of these fields is `null` when it could not be read; the reason is in `warnings`.
+
+**`battle.history`.** The local player's card plays this combat, counted the way the game's own cards count
+them (Finisher, Stomp, Pinpoint): a play counts once it has finished resolving, and an auto-play or a
+Replay repeat is a play too. `*_this_turn` covers the current turn only, so it is 0 during the enemy
+turn. `null` when the history could not be read.
 
 **Dead enemies.** `enemies[]` normally holds only living creatures, because the game drops a
 killed enemy from the fight. A few powers refuse that — `ReattachPower` on a Decimillipede

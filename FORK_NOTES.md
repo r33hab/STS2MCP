@@ -11,6 +11,13 @@ Actions reconstructed from the decompiled v0.107.1 game APIs so the emulator's
 differential-test harness (`scripts/validate_real_game_trace.py` in the sts2 repo) can
 drive the game — these existed only in the emulator author's unpublished local mod:
 
+> **Gated.** The `debug_*` actions below, and the other debug/staging actions in
+> `McpMod.Debug.cs` (`debug_add_card`, `debug_set_energy`, `debug_add_power`...), answer
+> HTTP 403 `{"status":"error","error":"debug actions disabled"}` unless `STS2_MCP.conf`
+> sets `"allow_debug_actions": true`. `return_to_main_menu` is not a debug action and is
+> always allowed. Every request also needs the API token (`X-STS2-Token`); see
+> `docs/raw-full.md`, "Authentication and configuration".
+
 - **`debug_start_encounter {encounter:"CorpseSlugsWeak"}`** — build a `CombatRoom` for
   the named encounter and enter it, jumping straight into that combat. (`McpMod.Debug.cs`)
 - **`debug_start_event {event:"SelfHelpBook"}`** — enter the named event's room,

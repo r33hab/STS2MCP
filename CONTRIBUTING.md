@@ -57,7 +57,7 @@ When in doubt, put it in C#. The Python server is replaceable; the mod is not.
 Open a [GitHub issue](https://github.com/Gennadiyev/STS2MCP/issues) using the bug report template. Helpful details:
 
 - Game version (the README explains how to find it)
-- Mod version (`curl http://localhost:15526/` returns it)
+- Mod version (`curl -H "X-STS2-Token: <token from STS2_MCP.conf>" http://localhost:15526/` returns it; without the token the mod answers 401)
 - OS and .NET version
 - Repro steps that don't depend on a specific run state if possible
 - Relevant console / log output

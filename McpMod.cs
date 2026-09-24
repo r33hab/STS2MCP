@@ -45,8 +45,16 @@ public static partial class McpMod
     ///    until the room is entered, so it let a client route around matchups no player could
     ///    see. map.encounters_seen replaces it with what this act has ALREADY served, which is
     ///    what the map's own hover tips show for travelled nodes.
+    ///
+    /// 4: player.draw_pile_ordered is gone from the default payload. The draw pile's true order
+    ///    is hidden information, now sent only to an opted-in `?hidden=1` read (with
+    ///    allow_hidden_state in STS2_MCP.conf), and every request needs the API token. The same
+    ///    version adds what a simulator needs to rebuild a combat position (enemy move ids, AI
+    ///    history, AI fields, slots and intent damage; card enchantments, afflictions and cost
+    ///    overrides; pile card ids; relic status and counters; battle.history), so a client that
+    ///    relies on those can require 4.
     /// </summary>
-    public const int StateSchemaVersion = 3;
+    public const int StateSchemaVersion = 4;
 
     public const int DefaultPort = 15526;
     private const string ConfigFileName = "STS2_MCP.conf";

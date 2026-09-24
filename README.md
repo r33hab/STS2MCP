@@ -30,9 +30,10 @@ several of them exist because `v0.107` removed or moved what upstream relied on.
 ## What this fork adds
 
 All additions are on the HTTP API (`POST /api/v1/singleplayer` with an `action` field, or the state
-returned by `GET /api/v1/singleplayer`). **They are not exposed through the bundled MCP server**, and
-`docs/raw-*.md` is upstream's API reference and does not describe them — this section and
-[FORK_NOTES.md](FORK_NOTES.md) are their documentation.
+returned by `GET /api/v1/singleplayer`). **They are not exposed through the bundled MCP server.**
+[docs/raw-full.md](docs/raw-full.md) documents the fork's state fields (the ordered piles, the run deck,
+the simulator fields of schema 4) and its access control (token, hidden state, debug gate); the actions
+below are documented in this section and in [FORK_NOTES.md](FORK_NOTES.md).
 
 > [!important]
 > The `debug_*` actions below answer `403 debug actions disabled` unless `STS2_MCP.conf` sets
@@ -183,7 +184,7 @@ curl -s -H "X-STS2-Token: $TOKEN" http://localhost:15526/
 A successful response looks like:
 
 ```json
-{"message": "Hello from STS2 MCP v0.4.0+2de67cd", "status": "ok", "version": "0.4.0", "commit": "2de67cd", "schema_version": 3}
+{"message": "Hello from STS2 MCP v0.4.0+2de67cd", "status": "ok", "version": "0.4.0", "commit": "2de67cd", "schema_version": 4}
 ```
 
 `commit` is the git revision the mod was built from (`null` if the build could not determine one) —
