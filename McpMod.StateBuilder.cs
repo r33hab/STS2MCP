@@ -676,7 +676,7 @@ public static partial class McpMod
 
         // The map on the decision screens outside combat too, as the player can open it there.
         if (ShouldCarryMap(result.GetValueOrDefault("state_type") as string))
-            result["map"] = BuildMapState(runState, onMapScreen: false);
+            AddOffScreenMap(result, runState);
 
         // Common run info
         result["run"] = new Dictionary<string, object?>
@@ -3217,6 +3217,16 @@ public static partial class McpMod
     /// </summary>
     private static bool ShouldCarryMap(string? stateType)
         => stateType != null && _mapBearingStates.Contains(stateType) && !CombatManager.Instance.IsInProgress;
+
+    /// <summary>
+    /// The map block on a decision screen outside combat (ShouldCarryMap). It rides along with the screen, so a map
+    /// that cannot be built costs only this block, with a `map` warning, never the screen's payload.
+    /// </summary>
+    private static void AddOffScreenMap(Dictionary<string, object?> result, RunState runState)
+    {
+        try { result["map"] = BuildMapState(runState, onMapScreen: false); }
+        catch (Exception ex) { Warn("map", ex); }
+    }
 
     /// <summary>
     /// What this act has already served. The game keeps its own record of every map point

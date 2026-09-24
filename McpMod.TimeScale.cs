@@ -14,16 +14,21 @@ namespace STS2_MCP;
 /// drops Engine.TimeScale to 0.1, ramps it back up over a fraction of a second, and ends by setting it to
 /// exactly 1. Before this, any speed the API had set silently went back to 1x after such a hit. Now
 /// ExecuteSetTimeScale remembers the scale it applied, and KeepApiTimeScale puts it back every frame the engine
-/// reads 1 again while no hit-stop is running. HitStopTaskPatch records the running hit-stop, so the scale is not
-/// touched while the hit-stop still ramps.
+/// reads 1 again while no hit-stop is running. HitStopTaskPatch records every hit-stop the game starts, so the scale
+/// is not touched while any of them still ramps.
 /// </summary>
 public static partial class McpMod
 {
     /// <summary>The scale the last successful set_time_scale applied; null until one does. Main thread only.</summary>
     private static double? _apiTimeScale;
 
-    /// <summary>The newest hit-stop's task, recorded by HitStopTaskPatch; null before the first. Main thread only.</summary>
-    private static Task? _hitStopTask;
+    /// <summary>
+    /// The hit-stops still running, recorded by HitStopTaskPatch. Every one counts, not only the newest:
+    /// NHitStop.DoHitStop cancels the previous hit-stop's token but then replaces _cancelToken with a new one, and
+    /// HitStopTask checks the field, not the token it started with, so an older hit-stop never sees its cancel. It
+    /// runs on to its own end, setting the scale each frame and finally to exactly 1. Main thread only.
+    /// </summary>
+    private static readonly List<Task> _runningHitStops = new();
 
     private static bool _timeScaleKeeperFailureReported;
 
@@ -39,7 +44,8 @@ public static partial class McpMod
 
         try
         {
-            if (_hitStopTask is { IsCompleted: false })
+            _runningHitStops.RemoveAll(task => task.IsCompleted);
+            if (_runningHitStops.Count > 0)
                 return;
             if (Engine.TimeScale == 1)
                 Engine.TimeScale = scale;
@@ -74,7 +80,7 @@ public static partial class McpMod
 
     /// <summary>
     /// Records the task of every hit-stop the game starts. HitStopTask is async, so the postfix runs when it
-    /// returns its Task, at its first await, just after the hit-stop has begun.
+    /// returns its Task, at its first await, just after the hit-stop has begun. A task already complete is not kept.
     /// </summary>
     [HarmonyPatch]
     private static class HitStopTaskPatch
@@ -99,6 +105,12 @@ public static partial class McpMod
             yield return method;
         }
 
-        private static void Postfix(Task __result) => _hitStopTask = __result;
+        private static void Postfix(Task __result)
+        {
+            // Pruned here as well as by the keeper, which returns early while no API scale is set.
+            _runningHitStops.RemoveAll(task => task.IsCompleted);
+            if (!__result.IsCompleted)
+                _runningHitStops.Add(__result);
+        }
     }
 }

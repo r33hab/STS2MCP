@@ -176,8 +176,9 @@ state-specific data:
 
 `run.map_coord` is the node the player last entered this act, in the coordinates of `map.nodes[].col/row` (the
 game's `RunState.CurrentMapCoord`). It is `null` before the act's first node: on the map at the start of acts 2
-and 3, until the starting node is chosen. At Neow it is already the starting node (row 0). It is on every payload
-that has a `run` block, combat included.
+and 3, and of an act 1 begun without Neow, until the starting node is chosen (the game's `RunManager.EnterAct`
+enters the starting node itself only for an act 1 that starts with Neow). At Neow it is already the starting node
+(row 0). It is on every payload that has a `run` block, combat included.
 
 **The map outside combat.** The decision screens outside combat — `rewards`, `card_reward`, `event` (Neow and
 the other Ancients included), `fake_merchant`, `rest_site`, `shop`, `treasure`, `card_select`, `bundle_select`,
@@ -185,6 +186,8 @@ the other Ancients included), `fake_merchant`, `rest_site`, `shop`, `treasure`, 
 on the map screen, so a client can weigh a choice against the route ahead. The player can open the map at any
 moment with the map button, so nothing hidden is added. It is left out in combat (including a `card_select` a card
 opens mid-fight) and on the other screens. Markdown output is unchanged: it renders the map on the map screen only.
+A map that cannot be built costs only this block: the screen's payload is still sent, without `map` and with a
+`map` entry in `warnings`.
 
 ### Player Object
 
@@ -905,7 +908,8 @@ Pick one card to add to your deck. Appears after claiming a card reward, or dire
 The same block rides along on the decision screens outside combat (see [Common Top-Level Fields](#common-top-level-fields)).
 There, `next_options` lists what the map screen will offer once this room is done, computed from the run the way
 the game's map screen computes it when it opens: the current node's children (every node of the next row with free
-travel, as Winged Boots give), the boss after the last row, the starting node before the act's first node. It is
+travel, as Winged Boots give), the boss after the last row, the second boss after the first one in an act with two
+bosses, the starting node before the act's first node. It is
 ordered the same way, so an `index` there is the index `choose_map_node` takes once the map is open, but
 `choose_map_node` itself only works on the map screen. On the map screen, `next_options` is read from the screen's
 own nodes, as before.
@@ -1783,7 +1787,9 @@ The setting lasts until it is changed again or the game restarts, and every stat
 **Hit-stop.** Some heavy hits (moves of Vantom, Mecha Knight and Ceremonial Beast) trigger the game's hit-stop:
 it drops the engine's time scale to 0.1, ramps it back up over a fraction of a second, and ends by setting it to
 exactly 1. The mod remembers the scale you set and puts it back as soon as the hit-stop has ended (it checks every
-frame: scale back at 1, a scale other than 1 set through this action, no hit-stop running). So the speed survives
+frame: scale back at 1, a scale other than 1 set through this action, no hit-stop running). A hit-stop that starts
+while another still runs does not stop the first one, which runs on to its own end, so the mod waits until every
+running hit-stop has ended. So the speed survives
 those fights, and a state read during a hit-stop reports the lower `time_scale` of that moment. The mod only ever
 changes a scale that reads exactly 1; any other value, whoever set it, is left alone.
 
