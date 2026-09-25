@@ -213,6 +213,7 @@ Always present at the top level (except `menu`). Contains everything about the l
   "draw_pile": [ /* Pile Card Objects (sorted by rarity, matching in-game display) */ ],
   "discard_pile": [ /* Pile Card Objects */ ],
   "exhaust_pile": [ /* Pile Card Objects */ ],
+  "play_pile": [ /* Pile Card Objects; usually empty - see "Pile Card Object" below */ ],
   // The same cards in the game's own order: the hand as in `hand`, and for the piles index 0 is the top.
   // `uid` is the card's uid from `hand` / the Pile Card Objects, so each entry can be matched to its full entry.
   "hand_ordered": [ { "id": "STRIKE_IRONCLAD", "is_upgraded": false, "uid": "STRIKE_IRONCLAD#0" } ],
@@ -370,7 +371,7 @@ Every card object — in `hand`, the Pile Card Objects, `deck`, and the card scr
 `enchantment`, `affliction`, `fields` and `unplayable` are `null` when they could not be read; the reason
 is in `warnings`.
 
-### Pile Card Object (draw/discard/exhaust piles)
+### Pile Card Object (draw/discard/exhaust/play piles)
 
 ```jsonc
 {
@@ -388,6 +389,18 @@ is in `warnings`.
   "unplayable": false        // true for a curse or status (Wound, Injury...): see "Card state"
 }
 ```
+
+**The play pile.** `player.play_pile` is built by the same `BuildPileCardList` as `draw_pile` / `discard_pile` /
+`exhaust_pile`, so a play-pile entry is the same Pile Card Object shape, in the order the game holds them. It is
+usually empty. The game moves a card here (`CardModel.OnPlayWrapper`) before running its `OnPlay`, and that is
+exactly when a card-sourced in-combat selection (Burning Pact, True Grit+, Brand, Dual Wield, Armaments,
+Headbutt...) can be open, so `play_pile` on that read holds that card's full object — its upgrade, cost overrides
+and enchantment — instead of leaving a simulator to guess which copy is resolving. It can hold more than one card
+during a nested play: Havoc auto-playing Headbutt from the draw pile leaves both Havoc (still resolving) and
+Headbutt (now playing) in it at once. Its `uid` is the same the card carried in `hand` (see "Card uids"): moving a
+card between piles does not change its identity, so the registry needs no special case for it. `play_pile` is shown
+on screen — the card visibly leaves the hand (or its pile, for an auto-play) while it resolves — so it reveals
+nothing hidden.
 
 ### Orb Object
 
@@ -1167,7 +1180,7 @@ carry the fight with them, so a client can tell the decision is part of the comb
 |---|---|---|
 | `in_combat` | `true` | `false` |
 | `battle` | The same block the `monster` / `elite` / `boss` state carries (enemies, intents, history...), built under the same [hidden-information](#hidden-information) rules: `move_follow_up_id` only on a `?hidden=1` read with `allow_hidden_state` on | absent |
-| `player` | As in combat: `energy`, `hand`, the piles (`draw_pile` sorted as the game shows it), orbs | as on any other screen |
+| `player` | As in combat: `energy`, `hand`, the piles (`draw_pile` sorted as the game shows it, `play_pile` holding the card whose effect opened this screen while it resolves), orbs | as on any other screen |
 
 "In a fight" means the current room is a combat room and its combat has not ended (the game's
 `CombatManager.IsInProgress`). `hand_select` only exists in a fight, so it is always `in_combat: true`. `state_type`
@@ -1200,7 +1213,7 @@ screen asks for, in the game's own terms instead of its localized text, and what
 | `prompt_key` | The prompt's localization table and key, joined by a dot, the same in every language: `card_selection.TO_EXHAUST`, `cards.HEADBUTT.selectionScreenPrompt`, `gameplay_ui.CHOOSE_CARD_UPGRADE_HEADER` (Armaments). CHOOSE is always `gameplay_ui.CHOOSE_CARD_HEADER`, its banner. | the prompt cannot be read (with a warning) |
 | `source.type` | `card`, `potion`, `relic` or `power`: what kind of model opened the screen. `unknown` for any other model (an orb, a monster) and when the game names none (below). | never |
 | `source.id` | That model's id (`HEADBUTT`, `ATTACK_POTION`, `GAMBLING_CHIP`, `ENTROPY_POWER`); an `unknown` model the game does name keeps its id. | no model |
-| `source.uid` | The source card's uid. | not a card |
+| `source.uid` | The source card's uid, matching its entry in `player.play_pile` while this screen is open (see "The play pile" under "Pile Card Object") — so the played card's full object, not just its id, is one lookup away. | not a card |
 | `min` / `max` | The selector's bounds, the game's `CardSelectorPrefs.MinSelect` / `MaxSelect`. A "choose any number" prompt (Gambling Chip, Gambler's Brew) has the game's own no-limit `max`, 999999999. CHOOSE: `max` 1, and `min` 0 when it can be skipped, 1 when it cannot. | the screen's prefs cannot be read (with a warning); for CHOOSE, `min` when its skip flag cannot be read |
 | `can_skip` | The screen can end with no card chosen: a hand or grid whose `min` is 0 (its confirm button works with nothing picked), a deck screen that has a close button (the game's `Cancelable`: a shop removal, a smith), a choose-a-card screen with a skip button. So `min` is 0 exactly when `can_skip` is true, except on a closable deck screen. | as `min` |
 | `selected` | The cards already picked, `{uid, id}` each. On the hand, in the order they were picked. On a grid, in the order of the screen's own selection set, which is the order the game acts on them in: the pick order, except that a card picked after a deselect takes the freed place. CHOOSE: always `[]`, as a pick completes the screen. | unreadable (with a warning) |

@@ -1725,6 +1725,15 @@ public static partial class McpMod
             state["discard_pile"] = BuildPileCardList(combatState.DiscardPile.Cards, PileType.Discard);
             state["exhaust_pile"] = BuildPileCardList(combatState.ExhaustPile.Cards, PileType.Exhaust);
 
+            // The card whose OnPlay is currently running sits here - CardModel.OnPlayWrapper adds it
+            // to PileType.Play before invoking OnPlay - which is exactly when a card-sourced selection
+            // screen (Burning Pact, Headbutt, Armaments...) can be open, so the simulator gets the
+            // played card's full object (uid, upgrade, cost, enchantment) instead of a guess. Usually
+            // empty; can hold more than one during a nested play (Havoc auto-playing Headbutt from the
+            // draw pile while Havoc's own OnPlay is still running). Same builder, and the same uid
+            // registry (RefreshCardUidRegistry numbers it before this runs), as the other piles.
+            state["play_pile"] = BuildPileCardList(combatState.PlayPile.Cards, PileType.Play);
+
             // FORK ADDITION — true pile order (index 0 = top of pile, drawn next), with
             // raw entry ids rather than localized titles. `draw_pile` above is sorted by
             // rarity/id to match the in-game display, so it cannot be used to compare
