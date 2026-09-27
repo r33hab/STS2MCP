@@ -426,9 +426,24 @@ Used for both player `status` and enemy `status`.
   "amount": 3,
   "type": "Buff",            // "Buff" or "Debuff"
   "description": "Increases attack damage by 3.",
-  "keywords": [ /* Keyword Objects */ ]
+  "keywords": [ /* Keyword Objects */ ],
+  "fields": {}               // State the power keeps beside its amount — see below
 }
 ```
+
+`fields` holds the state a simulator needs that neither `amount` nor the description carries,
+under fixed names. Only these powers have any, and each always carries all of its keys:
+
+| Power | Keys |
+|---|---|
+| `SKITTISH_POWER` | `has_gained_block_this_turn` — it has already gained its block this turn |
+| `SURROUNDED_POWER` | `facing` — `"Right"` or `"Left"`, which way the player faces |
+| `POSSESS_SPEED_POWER`, `POSSESS_STRENGTH_POWER` | `stolen` — the Dexterity or Strength it has taken from the players so far, a positive number it hands back on death |
+| `SWIPE_POWER` | `stolen_card` — the stolen card's id, `null` if none; `stolen_card_upgraded` |
+
+Every other power has `fields: {}`. It is `null` when it could not be read; the reason is in
+`warnings`. All of it is on screen: the block Skittish gains, the way the player faces, the debuffs a
+Possess power applied, and the card in Swipe's tooltip.
 
 ### Keyword Object
 
@@ -739,10 +754,13 @@ the targetable enemies; `play_card` and `use_potion` already refuse a dead targe
 
 `revive` is present only when the corpse is actually scheduled to come back: `in_turns` is
 read off the monster's move chain (2 the turn it dies, 1 the turn before it stands up, and
-its `intents` then show `Heal`), and `hp` is the amount it heals for. A corpse held in the
-fight by something that never revives it (`DieForYouPower`, `IllusionPower`) has `alive: false`
-and no `revive`, and neither does the last segment of a Decimillipede — with no living peer
-left to reattach to, the fight is over rather than about to restart.
+its `intents` then show `Heal`), and `hp` is the amount it heals for, `null` when its power's
+amount is not that. The Obscura's Parafright (`IllusionPower`, which heals it to full) and the
+Test Subject (`AdaptablePower`, which respawns it on a larger max HP) come back one enemy turn
+after they fall, with `hp: null`. A corpse held in the fight by something that never revives it
+(`DieForYouPower`) has `alive: false` and no `revive`, and neither does the last segment of a
+Decimillipede — with no living peer left to reattach to, the fight is over rather than about to
+restart.
 
 ### `hand_select` — In-Combat Card Selection
 

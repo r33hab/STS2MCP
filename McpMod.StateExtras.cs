@@ -8,6 +8,7 @@ using MegaCrit.Sts2.Core.Context;
 using MegaCrit.Sts2.Core.Entities.Cards;
 using MegaCrit.Sts2.Core.Entities.Creatures;
 using MegaCrit.Sts2.Core.Models;
+using MegaCrit.Sts2.Core.Models.Powers;
 using MegaCrit.Sts2.Core.MonsterMoves.Intents;
 using MegaCrit.Sts2.Core.Saves.Runs;
 
@@ -433,6 +434,74 @@ public static partial class McpMod
             return ReadPrimitiveMembers(relic, members, "relic.fields");
         }
         catch (Exception ex) { Warn("relic.fields", ex); return null; }
+    }
+
+    // ------------------------------------------------------------------ powers
+
+    /// <summary>
+    /// `fields` on a power object: the state a power keeps beside its amount that a simulator
+    /// needs and neither `amount` nor the description carries, under fixed names:
+    /// SkittishPower `has_gained_block_this_turn`; SurroundedPower `facing` ("Right" or
+    /// "Left"); PossessSpeedPower and PossessStrengthPower `stolen`, the Dexterity or Strength
+    /// taken from the players so far as a positive number (summed over players); SwipePower
+    /// `stolen_card`, the card's id (null when it holds none), and `stolen_card_upgraded`.
+    /// Every key of a listed power is always present. `{}` for any other power; null when a
+    /// read failed, with the reason in `warnings`.
+    ///
+    /// All of it is on screen: the block Skittish gains, the way the player faces, the debuffs
+    /// a Possess power applied, and the stolen card in Swipe's tooltip.
+    /// </summary>
+    private static Dictionary<string, object?>? BuildPowerFields(PowerModel power)
+    {
+        try
+        {
+            var fields = new Dictionary<string, object?>();
+            switch (power)
+            {
+                case SkittishPower skittish:
+                    fields["has_gained_block_this_turn"] = skittish.HasGainedBlockThisTurn;
+                    break;
+                case SurroundedPower surrounded:
+                    fields["facing"] = surrounded.Facing.ToString();
+                    break;
+                case PossessSpeedPower or PossessStrengthPower:
+                    int? stolen = PossessedTotal(power);
+                    if (stolen == null)
+                        return null;
+                    fields["stolen"] = stolen;
+                    break;
+                case SwipePower swipe:
+                    var card = swipe.StolenCard;
+                    fields["stolen_card"] = card?.Id.Entry;
+                    fields["stolen_card_upgraded"] = card?.IsUpgraded ?? false;
+                    break;
+            }
+            return fields;
+        }
+        catch (Exception ex) { Warn("status.fields", ex); return null; }
+    }
+
+    /// <summary>The Possess powers keep their tallies in private internal data, per player.</summary>
+    private static readonly PropertyInfo? _stolenDexterityProperty = typeof(PossessSpeedPower)
+        .GetProperty("StolenDexterity", BindingFlags.Instance | BindingFlags.NonPublic);
+
+    private static readonly PropertyInfo? _stolenStrengthProperty = typeof(PossessStrengthPower)
+        .GetProperty("StolenStrength", BindingFlags.Instance | BindingFlags.NonPublic);
+
+    /// <summary>
+    /// What a Possess power has taken so far. Its AfterPowerAmountChanged adds every reduction
+    /// its owner makes to a player's Dexterity or Strength, so the tally is negative, and its
+    /// AfterDeath hands back the negation. Null, with a warning, if the tally is unreadable.
+    /// </summary>
+    private static int? PossessedTotal(PowerModel power)
+    {
+        var property = power is PossessSpeedPower ? _stolenDexterityProperty : _stolenStrengthProperty;
+        if (property?.GetValue(power) is not IDictionary<Creature, decimal> tally)
+        {
+            Warn("status.fields", $"{power.GetType().Name}'s stolen tally is missing");
+            return null;
+        }
+        return (int)-tally.Values.Sum();
     }
 
     // ------------------------------------------------------------------ history
