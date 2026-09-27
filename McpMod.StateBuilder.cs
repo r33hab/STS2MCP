@@ -2567,6 +2567,10 @@ public static partial class McpMod
     /// One move is performed per enemy turn, so the segment is back two enemy turns after
     /// it fell, and the API said nothing about it.
     ///
+    /// The Obscura's Parafright (IllusionPower) and the Test Subject (AdaptablePower) come
+    /// back too: each power forces a Heal move (REVIVE_MOVE, RESPAWN_MOVE) the moment its
+    /// owner dies, one enemy turn ahead.
+    ///
     /// Returns null for a corpse with no heal move ahead of it (DieForYouPower and friends
     /// also keep their owner in the fight, but it stays dead) - "revive" present means
     /// "this is coming back", never merely "this is dead".
@@ -2574,12 +2578,16 @@ public static partial class McpMod
     private static Dictionary<string, object?>? BuildReviveState(Creature creature)
     {
         var power = FindPowerKeepingCorpseInCombat(creature);
+        bool reattach = power is MegaCrit.Sts2.Core.Models.Powers.ReattachPower;
 
         // ReattachPower.DoReattach bails out when every other segment is dead too - that
         // is the kill, and the whole Decimillipede fades out. Saying "back in 2 turns"
         // while the fight is ending would be exactly backwards, so check the same thing
-        // the power checks: another living holder of the same power.
-        if (power != null && !HasLivingPeerWithPower(creature, power))
+        // the power checks: another living holder of the same power. Only Reattach has that
+        // rule: IllusionPower (the Obscura's Parafright) and AdaptablePower (the Test
+        // Subject) force their Heal move on death whatever else lives, and a lone holder is
+        // the usual case for both.
+        if (reattach && !HasLivingPeerWithPower(creature, power!))
             return null;
 
         int? turns = TurnsUntilRevive(creature);
@@ -2597,8 +2605,9 @@ public static partial class McpMod
             revive["power_name"] = SafeGetText(() => power.Title);
             // ReattachPower heals by its own Amount, so its stack count is the HP the
             // segment comes back with. Reported as null rather than guessed for a power
-            // whose amount is not a heal.
-            int? amount = SafeGetInt(() => power.Amount);
+            // whose amount is not a heal: Illusion heals to full, and Adaptable's respawn
+            // raises the max HP to the next form's.
+            int? amount = reattach ? SafeGetInt(() => power.Amount) : null;
             revive["hp"] = amount > 0 ? amount : null;
         }
 
@@ -4213,7 +4222,8 @@ public static partial class McpMod
                     ["amount"] = amount,
                     ["type"] = power.Type.ToString(),
                     ["description"] = resolvedDesc,
-                    ["keywords"] = BuildHoverTips(extraTips)
+                    ["keywords"] = BuildHoverTips(extraTips),
+                    ["fields"] = BuildPowerFields(power)
                 };
                 if (displayAmount != amount)
                     entry["display_amount"] = displayAmount;
@@ -4246,7 +4256,8 @@ public static partial class McpMod
             ["type"] = SafeGetText(() => power.Type.ToString()),
             ["description"] = null,
             ["description_unavailable"] = true,
-            ["keywords"] = new List<string>()
+            ["keywords"] = new List<string>(),
+            ["fields"] = BuildPowerFields(power)
         };
         return entry;
     }
