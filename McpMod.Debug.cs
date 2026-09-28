@@ -373,10 +373,15 @@ public static partial class McpMod
     // RunManager.Instance.State, so checking one and then null-forgiving-dereferencing
     // the other a moment later leaves a window for State to be nulled out in between
     // (a run ending or being abandoned runs on the game's own async/main-thread
-    // machinery, not this handler's) -- confirmed live: a fight-lab session that
-    // abandons a run right after a debug-started boss win and immediately embarks the
-    // next one hit a NullReferenceException here ("did not reach act 2, stuck at 1").
-    // One read closes that window regardless of its exact cause.
+    // machinery, not this handler's). Confirmed live: this call threw a
+    // NullReferenceException right after a fight-lab session abandoned a run following
+    // a debug-started boss win and immediately embarked the next one ("did not reach
+    // act 2, stuck at 1") -- no stack trace was captured, so this TOCTOU gap is the
+    // best-supported candidate found by inspection, not a confirmed root cause. Closing
+    // it is a strict improvement regardless: it cannot introduce a null dereference
+    // that was not already possible, and the no-run case now answers the same
+    // controlled error every other debug_* handler in this file uses instead of an
+    // unguarded null-forgiving read.
     private static Dictionary<string, object?> ExecuteDebugEnterNextAct()
     {
         RunState? state = RunManager.Instance.DebugOnlyGetState();
