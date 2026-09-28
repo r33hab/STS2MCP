@@ -112,6 +112,10 @@ public static partial class McpMod
         if (!RunManager.Instance.IsInProgress)
         {
             result["state_type"] = "menu";
+            // Which mods the game has loaded. A content mod changes the pools every roll
+            // is drawn over, so a session recorded with one cannot be replayed against
+            // the unmodded game; this is how an offline replay tells the two apart.
+            result["loaded_mods"] = BuildLoadedMods();
 
             // Detect which menu screen is active
             if (tree?.Root != null)
@@ -527,7 +531,13 @@ public static partial class McpMod
             result["game_over"] = new Dictionary<string, object?>
             {
                 ["message"] = "Run ended.",
-                ["options"] = new List<string> { "main_menu" }
+                ["options"] = new List<string> { "main_menu" },
+                // The seed of the run that just ENDED, for offline seed-exact replay. It
+                // is hidden information while the run is live -- it predicts every roll --
+                // so it is sent only here, once there is nothing left to predict, the same
+                // way the run history already exposes finished runs' seeds.
+                ["seed"] = SafeRead(() => runState.Rng.StringSeed),
+                ["loaded_mods"] = BuildLoadedMods()
             };
         }
         else if (topOverlay is IOverlayScreen
@@ -684,7 +694,10 @@ public static partial class McpMod
             ["act"] = runState.CurrentActIndex + 1,
             ["floor"] = runState.TotalFloor,
             ["ascension"] = runState.AscensionLevel,
-            ["map_coord"] = BuildMapCoord(runState)
+            ["map_coord"] = BuildMapCoord(runState),
+            // When the run began (unix seconds): the game names the run's history file
+            // after it, so a session log can be joined to its run exactly.
+            ["start_time"] = RunStartTime()
         };
 
         // Always include full player data (relics, potions, deck, etc.) on every screen
@@ -2734,10 +2747,14 @@ public static partial class McpMod
                     ["description"] = SafeGetText(() => opt.Description),
                     ["is_locked"] = opt.IsLocked,
                     ["is_proceed"] = opt.IsProceed,
-                    ["was_chosen"] = opt.WasChosen
+                    ["was_chosen"] = opt.WasChosen,
+                    // The option's own key (`BYRDONIS_NEST.pages.INITIAL.options.EAT`), the
+                    // one the run history records a choice under; the title is only text.
+                    ["text_key"] = opt.TextKey
                 };
                 if (opt.Relic != null)
                 {
+                    optData["relic_id"] = opt.Relic.Id.Entry;
                     optData["relic_name"] = SafeGetText(() => opt.Relic.Title);
                     optData["relic_description"] = SafeGetText(() => opt.Relic.DynamicDescription);
                 }
@@ -3534,6 +3551,11 @@ public static partial class McpMod
                 item["potion_name"] = SafeGetText(() => potionReward.Potion.Title);
                 item["potion_description"] = SafeGetText(() => potionReward.Potion.DynamicDescription);
             }
+            else if (reward is RelicReward relicReward && relicReward.Relic != null)
+            {
+                item["relic_id"] = relicReward.Relic.Id.Entry;
+                item["relic_name"] = SafeGetText(() => relicReward.Relic.Title);
+            }
 
             items.Add(item);
             index++;
@@ -4300,5 +4322,50 @@ public static partial class McpMod
         }
 
         return pets;
+    }
+
+    /// <summary>
+    /// The mods the game has loaded, with whether each says it affects gameplay. Nothing
+    /// here is hidden information: it is the same list the game's own main menu shows.
+    /// </summary>
+    private static List<Dictionary<string, object?>> BuildLoadedMods()
+    {
+        var mods = new List<Dictionary<string, object?>>();
+        try
+        {
+            foreach (var mod in MegaCrit.Sts2.Core.Modding.ModManager.GetLoadedMods())
+            {
+                mods.Add(new Dictionary<string, object?>
+                {
+                    ["id"] = mod.manifest?.id,
+                    ["name"] = mod.manifest?.name,
+                    ["version"] = mod.manifest?.version,
+                    ["source"] = mod.modSource.ToString(),
+                    ["affects_gameplay"] = mod.manifest?.affectsGameplay ?? true
+                });
+            }
+        }
+        catch (Exception ex) { Warn("state.loaded_mods", ex); }
+        return mods;
+    }
+
+    /// <summary>`RunManager._startTime`: when the run began, in unix seconds.</summary>
+    private static long? RunStartTime()
+    {
+        try
+        {
+            return GetInstanceFieldValue(RunManager.Instance, "_startTime") as long?;
+        }
+        catch (Exception ex)
+        {
+            Warn("state.run.start_time", ex);
+            return null;
+        }
+    }
+
+    private static T? SafeRead<T>(Func<T> read) where T : class
+    {
+        try { return read(); }
+        catch (Exception ex) { Warn("state.safe_read", ex); return null; }
     }
 }
