@@ -310,7 +310,8 @@ public static partial class McpMod
     /// declares is left out, and so are the class's overrides of it (MinInitialHp, the sfx paths),
     /// which are fixed per class rather than state. An Rng-typed member (the monster's Rng, its
     /// RunRng set) is never one of those types, so the AI's randomness cannot leak through here.
-    /// Entries at their type's default are left out (see ReadPrimitiveMembers).
+    /// Entries at their type's default are kept (a 0 count is information); relic fields, read
+    /// through the same ReadPrimitiveMembers, still leave them out.
     /// </summary>
     private static Dictionary<string, object?>? BuildAiFields(MonsterModel? monster)
     {
@@ -320,7 +321,10 @@ public static partial class McpMod
         {
             var members = _aiFieldMembers.GetOrAdd(monster.GetType(), type =>
                 CollectDeclaredPrimitiveMembers(type, typeof(MonsterModel), includeProperties: true, IsAiFieldType));
-            return ReadPrimitiveMembers(monster, members, "enemy.ai_fields");
+            // Defaults included: a count at 0 (TwoTailedRat.CallForBackupCount before any rat
+            // has called) is a value a simulator needs, and leaving it out made it read as
+            // missing rather than as none.
+            return ReadPrimitiveMembers(monster, members, "enemy.ai_fields", keepDefaults: true);
         }
         catch (Exception ex) { Warn("enemy.ai_fields", ex); return null; }
     }
@@ -475,6 +479,12 @@ public static partial class McpMod
                     fields["stolen_card"] = card?.Id.Entry;
                     fields["stolen_card_upgraded"] = card?.IsUpgraded ?? false;
                     break;
+                case ThieveryPower thievery:
+                    // The power's Amount is the steal RATE; what it has taken so far is its
+                    // GoldVar, which Steal() grows by every coin it lifts. The player saw
+                    // each one leave their purse, so nothing hidden is read.
+                    fields["stolen_gold"] = (int)thievery.DynamicVars.Gold.BaseValue;
+                    break;
             }
             return fields;
         }
@@ -610,7 +620,8 @@ public static partial class McpMod
     /// default; a nullable member is left out only when null. Enums are reported by name. A
     /// member whose read throws is skipped and named in `warnings`.
     /// </summary>
-    private static Dictionary<string, object?> ReadPrimitiveMembers(object source, PrimitiveMember[] members, string context)
+    private static Dictionary<string, object?> ReadPrimitiveMembers(
+        object source, PrimitiveMember[] members, string context, bool keepDefaults = false)
     {
         var values = new Dictionary<string, object?>();
         foreach (var member in members)
@@ -628,7 +639,7 @@ public static partial class McpMod
                 continue;
             }
 
-            if (value == null || (!member.IsNullable && IsTypeDefault(value)))
+            if (value == null || (!keepDefaults && !member.IsNullable && IsTypeDefault(value)))
                 continue;
             values[member.Name] = value is Enum enumValue ? enumValue.ToString() : value;
         }
