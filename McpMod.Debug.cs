@@ -368,12 +368,27 @@ public static partial class McpMod
     // shortcut around it -- what it skips is having to WIN the act first, which costs a
     // heavily buffed run and several minutes per act-2 data point, and can still lose the
     // boss fight. In the last act EnterNextAct goes to The Architect instead.
+    //
+    // Read State once. IsInProgress and DebugOnlyGetState() both just read
+    // RunManager.Instance.State, so checking one and then null-forgiving-dereferencing
+    // the other a moment later leaves a window for State to be nulled out in between
+    // (a run ending or being abandoned runs on the game's own async/main-thread
+    // machinery, not this handler's). Confirmed live: this call threw a
+    // NullReferenceException right after a fight-lab session abandoned a run following
+    // a debug-started boss win and immediately embarked the next one ("did not reach
+    // act 2, stuck at 1") -- no stack trace was captured, so this TOCTOU gap is the
+    // best-supported candidate found by inspection, not a confirmed root cause. Closing
+    // it is a strict improvement regardless: it cannot introduce a null dereference
+    // that was not already possible, and the no-run case now answers the same
+    // controlled error every other debug_* handler in this file uses instead of an
+    // unguarded null-forgiving read.
     private static Dictionary<string, object?> ExecuteDebugEnterNextAct()
     {
-        if (!RunManager.Instance.IsInProgress)
+        RunState? state = RunManager.Instance.DebugOnlyGetState();
+        if (state == null)
             return Error("No run in progress");
 
-        int from = RunManager.Instance.DebugOnlyGetState()!.CurrentActIndex;
+        int from = state.CurrentActIndex;
         _ = RunManager.Instance.EnterNextAct();
 
         return new Dictionary<string, object?>
