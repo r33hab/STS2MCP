@@ -112,6 +112,7 @@ public static partial class McpMod
             "debug_enchant_card" => ExecuteDebugEnchantCard(player, data),
             "debug_enter_next_act" => ExecuteDebugEnterNextAct(),
             "debug_gain_max_hp" => ExecuteDebugGainMaxHp(player, data),
+            "debug_kill_enemy" => ExecuteDebugKillEnemy(player, data),
             "debug_upgrade_deck" => ExecuteDebugUpgradeDeck(player),
             "return_to_main_menu" => ExecuteReturnToMainMenu(),
             _ => Error($"Unknown action: {action}")
@@ -120,8 +121,8 @@ public static partial class McpMod
 
     /// <summary>
     /// The `debug_*` actions (McpMod.Debug.cs) rewrite the run instead of playing it: they add
-    /// cards, powers or max HP, set energy or stars, enchant or upgrade cards, and jump to a
-    /// chosen encounter, event, shop or act. HandlePostAction refuses every one of them with 403
+    /// cards, powers or max HP, set energy or stars, enchant or upgrade cards, kill an enemy, and
+    /// jump to a chosen encounter, event, shop or act. HandlePostAction refuses every one of them with 403
     /// unless STS2_MCP.conf sets allow_debug_actions, so a new debug action must keep the prefix.
     /// return_to_main_menu is not one of them: it is the pause menu's own Save and Quit.
     /// </summary>

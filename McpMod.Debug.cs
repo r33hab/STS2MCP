@@ -424,6 +424,59 @@ public static partial class McpMod
         };
     }
 
+    // {"action":"debug_kill_enemy","target":"JAW_WORM_0"}
+    // Kills one enemy (by entity id, the same ids debug_add_power's "target" takes), or
+    // -- with no "target" field at all -- every enemy still alive. CreatureCmd.Kill is
+    // the game's own command path (the autopilot's last resort against a fight it
+    // cannot win: The Insatiable's 5-turn kill, Aeonglass/Entomancer's hand floods,
+    // Lagavulin Matriarch's Strength drain, the Queen's Bound), so death, any
+    // multi-stage boss's next-stage transition, and reward logic all run exactly as a
+    // real kill would -- unlike a raw HP/state edit, which would skip all of that.
+    // force: true bypasses death-prevention effects (Fairy in a Bottle and the like):
+    // this is the mod deciding the fight is over, not a hit the run should be able to
+    // shrug off.
+    private static Dictionary<string, object?> ExecuteDebugKillEnemy(
+        Player player,
+        Dictionary<string, JsonElement> data)
+    {
+        if (!CombatManager.Instance.IsInProgress)
+            return Error("Not in combat");
+
+        var combatState = player.Creature.CombatState;
+        if (combatState == null)
+            return Error("No combat state");
+
+        List<Creature> targets;
+        string label;
+        if (data.TryGetValue("target", out var targetEl) && targetEl.ValueKind == JsonValueKind.String)
+        {
+            var targetId = targetEl.GetString()!;
+            var target = ResolveTarget(combatState, targetId);
+            if (target == null)
+                return Error($"Target '{targetId}' not found among alive enemies");
+            targets = new List<Creature> { target };
+            label = targetId;
+        }
+        else
+        {
+            targets = combatState.Enemies.Where(c => c.IsAlive).ToList();
+            if (targets.Count == 0)
+                return Error("No living enemies to kill");
+            label = "every living enemy";
+        }
+
+        // Fire-and-forget, like every other combat-mutating debug action here: the game
+        // resolves the kill (and any death/stage-change hooks it triggers) on its own
+        // loop; the caller polls /api/v1/singleplayer until the fight moves on.
+        _ = CreatureCmd.Kill(targets, force: true);
+
+        return new Dictionary<string, object?>
+        {
+            ["status"] = "ok",
+            ["message"] = $"Killing {label} ({targets.Count})",
+        };
+    }
+
     // {"action":"debug_upgrade_deck"}
     // Upgrades every upgradable card in the run's deck. The sibling of the above and for
     // the same reason: a deck of upgraded Strikes and Defends is what gets a scripted
