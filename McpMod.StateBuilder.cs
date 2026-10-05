@@ -3556,6 +3556,13 @@ public static partial class McpMod
                 item["relic_id"] = relicReward.Relic.Id.Entry;
                 item["relic_name"] = SafeGetText(() => relicReward.Relic.Title);
             }
+            else if (reward is SpecialCardReward && SpecialCardRewardCard?.GetValue(reward) is CardModel special)
+            {
+                // The card a Thieving Hopper stole, offered back once it is killed: only
+                // claiming it returns it to the deck, so it is a decision, and the card is
+                // what decides it (a starter Strike left behind is a free removal).
+                item["card"] = BuildCardState(special, 0);
+            }
 
             items.Add(item);
             index++;
@@ -4181,6 +4188,12 @@ public static partial class McpMod
 
         return state;
     }
+
+    // SpecialCardReward keeps its card private (`_card`); the reward screen's own hover tip
+    // is the only thing that shows it. Null if a game update renames it: no "card" then.
+    private static readonly System.Reflection.FieldInfo? SpecialCardRewardCard =
+        typeof(SpecialCardReward).GetField(
+            "_card", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
 
     private static string GetRewardTypeName(Reward reward) => reward switch
     {
